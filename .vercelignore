@@ -1,0 +1,8 @@
+# Never publish stock data or local-only files
+*.xlsx
+*.xls
+*.csv
+.DS_Store
+start.command
+start.bat
+README.md
