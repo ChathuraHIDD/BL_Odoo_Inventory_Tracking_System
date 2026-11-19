@@ -336,7 +336,12 @@
     if (view !== 'scan') stopCamera();
     updateStepper();
     if (view === 'upload') renderUpload();
-    if (view === 'scan') { renderScan(); focusScan(); }
+    if (view === 'scan') {
+      const last = S.scans[S.scans.length - 1];
+      if (last) showFeedback(last, R.scanStatus.get(last.id)); else resetFeedback();
+      renderScan();
+      focusScan();
+    }
     if (view === 'report') renderReport();
     window.scrollTo({ top: 0 });
   }
@@ -632,6 +637,7 @@
     const ring = $('#ring-fg');
     ring.style.strokeDasharray = C;
     ring.style.strokeDashoffset = C * (1 - (R.expected ? R.found / R.expected : 0));
+    ring.classList.toggle('zero', !R.found);
     $('#ring-pct').textContent = `${pct % 1 === 0 ? pct.toFixed(0) : pct.toFixed(1)}%`;
     $('#st-found').textContent = fmtInt(R.found);
     $('#st-missing').textContent = fmtInt(R.missing);
