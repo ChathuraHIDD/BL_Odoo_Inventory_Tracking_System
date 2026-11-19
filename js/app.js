@@ -882,7 +882,7 @@
       <td class="mono">${esc(r.serial)}</td>
       <td><div class="t-prod">${esc(r.name)}</div>${r.code ? `<div class="t-sub mono">${esc(r.code)}</div>` : ''}</td>
       <td>${esc(r.location)}</td>
-      <td class="muted">${r.scannedAt ? fmtDateTime(r.scannedAt).replace(/^.*?, /, '') + ' · ' + fmtTime(r.scannedAt) : '—'}</td>
+      <td class="muted">${r.scannedAt ? fmtDateTime(r.scannedAt) : '—'}</td>
     </tr>`).join('');
     $('#detail-empty').classList.toggle('hidden', list.length > 0);
   }
