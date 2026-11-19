@@ -225,6 +225,11 @@
   function loadSession() {
     S = safeGet(localStorage, STORE_KEY);
     if (S && !Array.isArray(S.items)) S = null;
+    if (S) {
+      // one record per serial: drop any repeat scans saved by older versions
+      const seen = new Set();
+      S.scans = (S.scans || []).filter((sc) => !seen.has(sc.key) && seen.add(sc.key));
+    }
     rebuildIndex();
     compute();
   }
@@ -390,6 +395,17 @@
     return { code, name };
   }
 
+  /** Spreadsheet cell -> JSON-safe value (dates become YYYY-MM-DD). */
+  function cellValue(v) {
+    if (v instanceof Date) {
+      if (isNaN(v)) return '';
+      const p = (n) => String(n).padStart(2, '0');
+      const d = `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`;
+      return v.getHours() || v.getMinutes() ? `${d} ${p(v.getHours())}:${p(v.getMinutes())}` : d;
+    }
+    return v ?? '';
+  }
+
   function findCol(header, tests) {
     for (const t of tests) {
       const i = header.findIndex((h) => t.test(h));
@@ -405,10 +421,14 @@
 
     for (const sheetName of wb.SheetNames) {
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '', raw: false, blankrows: false });
+      // same rows again with real numbers/dates, used to rebuild the report in the original layout
+      const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '', raw: true, blankrows: false });
       for (let h = 0; h < Math.min(rows.length, 20); h++) {
         const header = rows[h].map((c) => String(c).trim().toLowerCase());
         const cSerial = findCol(header, [/^lot\s*\/\s*serial(\s*number)?$/, /lot.*serial|serial.*lot/, /serial/, /^lot$/]);
         if (cSerial < 0) continue;
+        const columns = rows[h].map((c) => String(c).trim());
+        while (columns.length && !columns[columns.length - 1]) columns.pop();
         const cProduct = findCol(header, [/^product$/, /^product\s*name$/, /^product(?!.*(categ|uom|unit))/]);
         const cLocation = findCol(header, [/^location$/, /location/]);
         const cQty = findCol(header, [/^quantity$/, /^on\s*hand/, /^quantity/, /^qty/]);
@@ -436,13 +456,14 @@
             location: cLocation >= 0 ? (String(row[cLocation] ?? '').trim() || '(no location)') : '(no location)',
             qty: cQty >= 0 ? Number(String(row[cQty]).replace(/,/g, '')) || 0 : 1,
             unit: cUnit >= 0 ? String(row[cUnit] ?? '').trim() : '',
+            cells: columns.map((_, c) => cellValue(rawRows[r] ? rawRows[r][c] : row[c])),
           });
         }
         if (!items.length) throw new Error('The "Lot/Serial Number" column was found but it has no values.');
         const locMap = new Map();
         items.forEach((it) => locMap.set(it.location, (locMap.get(it.location) || 0) + 1));
         const locations = [...locMap.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => collator.compare(a.name, b.name));
-        return { items, locations, noSerial, dupes, missingProductCol: cProduct < 0 };
+        return { items, columns, locations, noSerial, dupes, missingProductCol: cProduct < 0 };
       }
     }
     throw new Error('Could not find a "Lot/Serial Number" column. Export the stock.quant list from Odoo with that column included.');
@@ -469,6 +490,7 @@
         uploadedAt: Date.now(),
         startedAt: null,
         items: parsed.items,
+        columns: parsed.columns,
         locations: parsed.locations,
         selected: parsed.locations.map((l) => l.name),
         started: false,
@@ -580,6 +602,12 @@
     if (!text || !S || !S.started) return null;
     const key = resolveKey(text);
     if (!key) return null;
+    const existing = S.scans.find((sc) => sc.key === key);
+    if (existing) {
+      const status = R.scanStatus.get(existing.id);
+      if (!quiet) { showFeedback(existing, status); beep(status); }
+      return status;
+    }
     const scan = { id: uid(), raw: text, key, t: Date.now(), src };
     S.scans.push(scan);
     compute();
@@ -601,10 +629,6 @@
     if (status === 'found') {
       title = 'Matched';
       sub = `<span class="mono">${esc(it.serial)}</span> · ${esc(it.name)}${it.code ? ` <span class="muted">(${esc(it.code)})</span>` : ''} · ${esc(it.location)}`;
-    } else if (status === 'duplicate') {
-      const first = R.firstScan.get(scan.key) || R.exceptions.find((e) => e.key === scan.key);
-      title = 'Already scanned';
-      sub = `<span class="mono">${esc(it ? it.serial : scan.raw)}</span>${it ? ' · ' + esc(it.name) : ''} was first scanned at ${fmtTime(first && (first.t || first.first))}. Not counted twice.`;
     } else if (status === 'other') {
       title = 'On report, but in a location you are not counting';
       sub = `<span class="mono">${esc(it.serial)}</span> · ${esc(it.name)} · Odoo location: <strong>${esc(it.location)}</strong>`;
@@ -612,7 +636,7 @@
       title = 'Not in stock report';
       sub = `<span class="mono">${esc(scan.raw)}</span> is not on the uploaded Odoo report. It is listed under exceptions.`;
     }
-    const cls = status === 'found' ? 'found' : status === 'duplicate' ? 'duplicate' : status === 'other' ? 'other' : 'unknown';
+    const cls = status === 'found' ? 'found' : status === 'other' ? 'other' : 'unknown';
     fb.className = `feedback ${cls}`;
     $('#fb-icon').innerHTML = ICONS[cls];
     $('#fb-title').textContent = title;
@@ -643,18 +667,17 @@
     $('#st-missing').textContent = fmtInt(R.missing);
     $('#st-unknown').textContent = fmtInt(R.unknown);
     $('#st-other').textContent = fmtInt(R.other);
-    $('#st-dup').textContent = fmtInt(R.dup);
     $('#st-expected').textContent = fmtInt(R.expected);
 
     // recent scans (latest 60)
     const recent = S.scans.slice(-60).reverse();
-    $('#recent-count').textContent = `${fmtInt(S.scans.length)} total`;
+    $('#recent-count').textContent = `${fmtInt(S.scans.length)} scanned`;
     $('#recent-list').innerHTML = recent.length
       ? recent.map((sc) => {
         const st = R.scanStatus.get(sc.id);
         const idx = index.get(sc.key);
         const it = idx === undefined ? null : S.items[idx];
-        const label = st === 'found' ? '' : st === 'duplicate' ? 'Duplicate · ' : st === 'other' ? `Other location (${it ? it.location : ''}) · ` : 'Not in report';
+        const label = st === 'found' ? '' : st === 'other' ? `Other location (${it ? it.location : ''}) · ` : 'Not in report';
         return `<li class="${sc.id === newId ? 'new' : ''}">
           <span class="r-ico ${st}">${R_MARK[st]}</span>
           <div class="r-main">
@@ -826,8 +849,7 @@
       .map((it) => {
         const hit = R.firstScan.get(it.key);
         return { ...it, found: !!hit, scannedAt: hit ? hit.t : null };
-      })
-      .sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.product, b.product) || collator.compare(a.serial, b.serial));
+      });
   }
 
   function renderReport() {
@@ -876,7 +898,7 @@
       (!filt.location || r.location === filt.location) &&
       (!q || norm(r.serial).includes(q) || norm(r.product).includes(q)));
     const counts = { all: base.length, found: base.filter((r) => r.found).length };
-    counts.missing = counts.all - counts.found;
+    counts.notfound = counts.all - counts.found;
     $$('#status-seg button').forEach((b) => {
       b.classList.toggle('active', b.dataset.status === filt.status);
       b.querySelector('span').textContent = fmtInt(counts[b.dataset.status]);
@@ -884,11 +906,10 @@
     const list = base.filter((r) => filt.status === 'all' || (filt.status === 'found' ? r.found : !r.found));
     $('#detail-table tbody').innerHTML = list.map((r, i) => `<tr>
       <td class="num muted">${i + 1}</td>
-      <td>${r.found ? '<span class="badge badge-found">Found</span>' : '<span class="badge badge-missing">Missing</span>'}</td>
-      <td class="mono">${esc(r.serial)}</td>
-      <td><div class="t-prod">${esc(r.name)}</div>${r.code ? `<div class="t-sub mono">${esc(r.code)}</div>` : ''}</td>
       <td>${esc(r.location)}</td>
-      <td class="muted">${r.scannedAt ? fmtDateTime(r.scannedAt) : '—'}</td>
+      <td><div class="t-prod">${esc(r.product)}</div></td>
+      <td class="mono">${esc(r.serial)}</td>
+      <td>${r.found ? '<span class="badge badge-found">Found</span>' : '<span class="badge badge-missing">Not Found</span>'}</td>
     </tr>`).join('');
     $('#detail-empty').classList.toggle('hidden', list.length > 0);
   }
@@ -903,7 +924,6 @@
       <td class="mono">${esc(e.item ? e.item.serial : e.raw)}</td>
       <td>${e.item ? esc(e.item.name) : '<span class="muted">Unknown</span>'}</td>
       <td>${e.item ? esc(e.item.location) : '—'}</td>
-      <td class="num">${e.count}</td>
       <td class="muted">${fmtTime(e.first)}</td>
     </tr>`).join('');
   }
@@ -911,88 +931,37 @@
   function exportExcel() {
     if (typeof XLSX === 'undefined') { toast('Spreadsheet library not loaded.'); return; }
     const now = new Date();
-    const rows = itemRows();
-    const fmtX = (t) => (t ? new Date(t).toLocaleString() : '');
+    // Older saved counts have no original columns: fall back to the main ones.
+    const columns = S.columns && S.columns.length ? S.columns : ['Location', 'Product', 'Lot/Serial Number', 'Quantity', 'Unit'];
+    const cellsOf = (it) => (it.cells && it.cells.length ? it.cells : [it.location, it.product, it.serial, it.qty, it.unit]);
 
-    const summary = [
-      ['BatteryLab: Stock Reconciliation Report'],
-      [],
-      ['Source file', S.fileName],
-      ['Locations counted', S.selected.join(', ')],
-      ['Count started', fmtX(S.startedAt)],
-      ['Report generated', fmtX(now)],
-      ['Counted by', 'odooadmin'],
-      [],
-      ['Expected items (on report)', R.expected],
-      ['Found', R.found],
-      ['Missing', R.missing],
-      ['Accuracy', R.expected ? `${((R.found / R.expected) * 100).toFixed(2)}%` : '—'],
-      ['Scanned, not in report', R.unknown],
-      ['Scanned, in another location', R.other],
-      ['Duplicate scans (ignored)', R.dup],
-      ['Total scans', S.scans.length],
-    ];
-
-    const detail = rows.map((r, i) => ({
-      '#': i + 1,
-      Status: r.found ? '✔ FOUND' : '✘ MISSING',
-      'Lot/Serial Number': r.serial,
-      'Product Code': r.code,
-      'Product Name': r.name,
-      'Product (Odoo)': r.product,
-      Location: r.location,
-      Quantity: r.qty,
-      Unit: r.unit,
-      'Scanned At': fmtX(r.scannedAt),
+    // Sheet 1: exactly the uploaded report (same columns, same order) + Status
+    const report = [[...columns, 'Status']];
+    for (const it of itemRows()) report.push([...columns.map((_, c) => cellsOf(it)[c] ?? ''), it.found ? 'Found' : 'Not Found']);
+    const ws = XLSX.utils.aoa_to_sheet(report);
+    ws['!cols'] = [...columns, 'Status'].map((h, c) => ({
+      wch: Math.min(48, Math.max(String(h).length, ...report.slice(1, 300).map((r) => String(r[c] ?? '').length)) + 2),
     }));
-    const byProduct = R.products.map((p) => ({
-      'Product Code': p.code,
-      'Product Name': p.name,
-      Expected: p.expected,
-      Found: p.found,
-      Missing: p.expected - p.found,
-      'Progress %': p.expected ? Math.round((p.found / p.expected) * 1000) / 10 : 0,
-    }));
-    const exceptions = R.exceptions.map((e) => ({
-      Type: e.type === 'unknown' ? 'Not in report' : 'In report, other location',
-      'Scanned Value': e.raw,
-      'Lot/Serial Number': e.item ? e.item.serial : '',
-      Product: e.item ? e.item.product : '',
-      'Report Location': e.item ? e.item.location : '',
-      'Times Scanned': e.count,
-      'First Scanned': fmtX(e.first),
-    }));
-    const log = S.scans.map((sc, i) => {
-      const idx = index.get(sc.key);
-      const it = idx === undefined ? null : S.items[idx];
-      const st = R.scanStatus.get(sc.id);
-      return {
-        '#': i + 1,
-        Time: fmtX(sc.t),
-        'Scanned Value': sc.raw,
-        Result: { found: 'Found', duplicate: 'Duplicate', other: 'Other location', unknown: 'Not in report' }[st],
-        Product: it ? it.product : '',
-        Source: sc.src,
-      };
-    });
-
+    ws['!autofilter'] = { ref: ws['!ref'] };
     const wb = XLSX.utils.book_new();
-    const add = (name, ws, cols) => {
-      if (cols) ws['!cols'] = cols.map((w) => ({ wch: w }));
-      if (ws['!ref'] && name !== 'Summary') ws['!autofilter'] = { ref: ws['!ref'] };
-      XLSX.utils.book_append_sheet(wb, ws, name);
-    };
-    const sheet = (data, header) => XLSX.utils.json_to_sheet(data, { header });
-    add('Summary', XLSX.utils.aoa_to_sheet(summary), [32, 60]);
-    add('Full Report', sheet(detail, Object.keys(detail[0] || { '#': 0, Status: '', 'Lot/Serial Number': '' })), [6, 12, 24, 16, 30, 40, 26, 9, 7, 22]);
-    add('Missing', sheet(detail.filter((d) => d.Status.includes('MISSING')).map((d, i) => ({ ...d, '#': i + 1 }))), [6, 12, 24, 16, 30, 40, 26, 9, 7, 22]);
-    add('Found', sheet(detail.filter((d) => d.Status.includes('FOUND')).map((d, i) => ({ ...d, '#': i + 1 }))), [6, 12, 24, 16, 30, 40, 26, 9, 7, 22]);
-    add('By Product', sheet(byProduct), [16, 34, 10, 10, 10, 11]);
-    add('Exceptions', sheet(exceptions.length ? exceptions : [{ Type: 'None', 'Scanned Value': 'Every scanned label was on the report' }]), [24, 28, 24, 40, 26, 14, 22]);
-    add('Scan Log', sheet(log.length ? log : [{ '#': '', Time: 'No scans' }]), [6, 22, 28, 16, 40, 10]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock Count');
 
-    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-    XLSX.writeFile(wb, `BatteryLab_Stock_Count_${stamp}.xlsx`);
+    // Sheet 2 (only when needed): labels scanned that are not on the counted report
+    if (R.exceptions.length) {
+      const extra = [['Lot/Serial Number', 'Product', 'Location', 'Status']];
+      for (const e of R.exceptions) {
+        extra.push(e.item
+          ? [e.item.serial, e.item.product, e.item.location, 'Scanned – location not counted']
+          : [e.raw, '', '', 'Scanned – not in report']);
+      }
+      const ws2 = XLSX.utils.aoa_to_sheet(extra);
+      ws2['!cols'] = [{ wch: 28 }, { wch: 44 }, { wch: 28 }, { wch: 30 }];
+      XLSX.utils.book_append_sheet(wb, ws2, 'Not in Report');
+    }
+
+    const p = (n) => String(n).padStart(2, '0');
+    const stamp = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}_${p(now.getHours())}${p(now.getMinutes())}`;
+    XLSX.writeFile(wb, `Stock_Count_${stamp}.xlsx`);
     toast('Excel report downloaded');
   }
 

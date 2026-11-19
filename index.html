@@ -22,7 +22,7 @@
         <ol class="login-steps">
           <li><span>1</span><div>Upload the Odoo <em>Quants</em> export</div></li>
           <li><span>2</span><div>Scan every QR / serial label in the store</div></li>
-          <li><span>3</span><div>Get the full found / missing report</div></li>
+          <li><span>3</span><div>Get the full found / not found report</div></li>
         </ol>
       </div>
       <div class="login-foot">BatteryLab · Inventory Control</div>
@@ -228,7 +228,6 @@
                 <div class="pc-row"><span class="pill pill-red"></span>Not yet scanned<b id="st-missing">0</b></div>
                 <div class="pc-row"><span class="pill pill-violet"></span>Not in report<b id="st-unknown">0</b></div>
                 <div class="pc-row"><span class="pill pill-blue"></span>Other location<b id="st-other">0</b></div>
-                <div class="pc-row"><span class="pill pill-amber"></span>Duplicate scans<b id="st-dup">0</b></div>
               </div>
               <div class="pc-total"><span id="st-expected">0</span> items expected</div>
             </div>
@@ -272,7 +271,7 @@
         <div class="stat-cards">
           <div class="stat"><div class="stat-l">Expected</div><div id="r-expected" class="stat-v">0</div><div class="stat-s">items on the report</div></div>
           <div class="stat stat-green"><div class="stat-l">Found</div><div id="r-found" class="stat-v">0</div><div id="r-found-s" class="stat-s"></div></div>
-          <div class="stat stat-red"><div class="stat-l">Missing</div><div id="r-missing" class="stat-v">0</div><div class="stat-s">on report, not scanned</div></div>
+          <div class="stat stat-red"><div class="stat-l">Not found</div><div id="r-missing" class="stat-v">0</div><div class="stat-s">on report, not scanned</div></div>
           <div class="stat stat-violet"><div class="stat-l">Not in report</div><div id="r-unknown" class="stat-v">0</div><div class="stat-s">scanned, not on report</div></div>
           <div class="stat stat-blue"><div class="stat-l">Other location</div><div id="r-other" class="stat-v">0</div><div class="stat-s">on report, outside scope</div></div>
         </div>
@@ -284,7 +283,7 @@
           </div>
           <div class="table-wrap">
             <table class="table" id="product-table">
-              <thead><tr><th>Product</th><th>Code</th><th class="num">Expected</th><th class="num">Found</th><th class="num">Missing</th><th class="w-progress">Progress</th></tr></thead>
+              <thead><tr><th>Product</th><th>Code</th><th class="num">Expected</th><th class="num">Found</th><th class="num">Not found</th><th class="w-progress">Progress</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
@@ -297,7 +296,7 @@
               <div class="seg" id="status-seg">
                 <button data-status="all" class="active">All <span></span></button>
                 <button data-status="found">Found <span></span></button>
-                <button data-status="missing">Missing <span></span></button>
+                <button data-status="notfound">Not found <span></span></button>
               </div>
               <select id="f-product" class="input-sm"><option value="">All products</option></select>
               <select id="f-location" class="input-sm"><option value="">All locations</option></select>
@@ -306,7 +305,7 @@
           </div>
           <div class="table-wrap">
             <table class="table" id="detail-table">
-              <thead><tr><th class="num">#</th><th>Status</th><th>Lot / Serial number</th><th>Product</th><th>Location</th><th>Scanned at</th></tr></thead>
+              <thead><tr><th class="num">#</th><th>Location</th><th>Product</th><th>Lot / Serial Number</th><th>Status</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
@@ -320,7 +319,7 @@
           </div>
           <div class="table-wrap">
             <table class="table" id="exc-table">
-              <thead><tr><th>Type</th><th>Scanned value</th><th>Product (if known)</th><th>Report location</th><th class="num">Times scanned</th><th>First scanned</th></tr></thead>
+              <thead><tr><th>Type</th><th>Scanned value</th><th>Product (if known)</th><th>Report location</th><th>Scanned at</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
