@@ -245,6 +245,280 @@
 
       <!-- ---------- STEP 3 : REPORT ---------- -->
       <section id="view-report" class="view hidden">
+        <div class="view-head">
+          <div>
+            <h1>Physical inventory report</h1>
+            <p id="report-meta" class="muted"></p>
+          </div>
+          <div class="head-actions no-print">
+            <button id="new-count" class="btn btn-ghost">New count</button>
+            <button id="pdf-btn" class="btn btn-secondary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15h6M9 18h4"/></svg>
+              PDF report
+            </button>
+            <button id="export-btn" class="btn btn-primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+              Export Excel
+            </button>
+          </div>
+        </div>
+
+        <!-- Report: the uploaded Odoo columns + Physical Inventory tick -->
+        <div class="card">
+          <div class="card-head wrap">
+            <h3>Stock report · physical inventory status</h3>
+            <div class="filters no-print">
+              <div class="seg" id="status-seg">
+                <button data-status="all" class="active">All <span></span></button>
+                <button data-status="found">✔ Found <span></span></button>
+                <button data-status="notfound">✘ Not found <span></span></button>
+              </div>
+              <select id="f-product" class="input-sm"><option value="">All products</option></select>
+              <select id="f-location" class="input-sm"><option value="">All locations</option></select>
+              <input id="f-search" class="input-sm" type="search" placeholder="Search serial or product…" />
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="detail-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="detail-empty" class="empty hidden">No items match these filters.</div>
+        </div>
+
+        <!-- Summary -->
+        <div class="card">
+          <div class="card-head"><h3>Summary</h3><span id="sum-accuracy" class="tiny muted"></span></div>
+          <div class="stat-cards">
+            <div class="stat"><div class="stat-l">Expected</div><div id="r-expected" class="stat-v">0</div><div class="stat-s">items on the report</div></div>
+            <div class="stat stat-green"><div class="stat-l">✔ Found</div><div id="r-found" class="stat-v">0</div><div id="r-found-s" class="stat-s"></div></div>
+            <div class="stat stat-red"><div class="stat-l">✘ Not found</div><div id="r-missing" class="stat-v">0</div><div class="stat-s">on report, not scanned</div></div>
+            <div class="stat stat-violet"><div class="stat-l">Not in report</div><div id="r-unknown" class="stat-v">0</div><div class="stat-s">scanned, not on report</div></div>
+            <div class="stat stat-blue"><div class="stat-l">Other location</div><div id="r-other" class="stat-v">0</div><div class="stat-s">on report, outside scope</div></div>
+          </div>
+          <div class="card-head sub-head">
+            <h4>By product</h4>
+            <span class="tiny muted no-print">Click a row to filter the report above</span>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="product-table">
+              <thead><tr><th>Product</th><th>Code</th><th class="num">Expected</th><th class="num">✔ Found</th><th class="num">✘ Not found</th><th class="w-progress">Progress</th></tr></thead>
+              <tbody></tbody>
+              <tfoot></tfoot>
+            </table>
+          </div>
+        </div>
+
+        <div id="exceptions-card" class="card">
+          <div class="card-head">
+            <h3>Exceptions: scanned but not expected</h3>
+            <span id="exc-count" class="tiny muted"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="exc-table">
+              <thead><tr><th>Type</th><th>Scanned value</th><th>Product (if known)</th><th>Report location</th><th>Scanned at</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="exc-empty" class="empty">No exceptions. Every scanned label was on the report.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ============================ APP ============================ -->
+  <div id="app" class="screen hidden">
+    <header class="topbar">
+      <div class="topbar-left">
+        <img src="assets/logo.png" alt="BatteryLab" class="topbar-logo" />
+        <span class="topbar-divider"></span>
+        <span class="topbar-title">Stock Count</span>
+      </div>
+
+      <nav class="stepper" aria-label="Steps">
+        <button class="step" data-view="upload"><span class="step-n">1</span><span class="step-l">Upload</span></button>
+        <span class="step-line"></span>
+        <button class="step" data-view="scan"><span class="step-n">2</span><span class="step-l">Scan</span></button>
+        <span class="step-line"></span>
+        <button class="step" data-view="report"><span class="step-n">3</span><span class="step-l">Report</span></button>
+      </nav>
+
+      <div class="topbar-right">
+        <div class="user-chip" title="Signed in">
+          <span class="avatar">OA</span>
+          <span class="user-name">odooadmin</span>
+        </div>
+        <button id="logout-btn" class="btn btn-ghost btn-sm">Sign out</button>
+      </div>
+    </header>
+
+    <main class="content">
+
+      <!-- ---------- STEP 1 : UPLOAD ---------- -->
+      <section id="view-upload" class="view hidden">
+        <div class="view-head">
+          <div>
+            <h1>Upload stock report</h1>
+            <p class="muted">Export <strong>Inventory → Physical Inventory (stock.quant)</strong> from Odoo as Excel or CSV and drop it here. The <strong>Lot/Serial Number</strong> and <strong>Product</strong> columns are used for matching.</p>
+          </div>
+        </div>
+
+        <div id="active-session-banner" class="banner hidden">
+          <div>
+            <strong>A count is already in progress.</strong>
+            <span id="active-session-text" class="muted"></span>
+          </div>
+          <div class="banner-actions">
+            <button class="btn btn-secondary btn-sm" data-goto="scan">Continue scanning</button>
+          </div>
+        </div>
+
+        <label id="dropzone" class="dropzone" tabindex="0">
+          <input id="file-input" type="file" accept=".xlsx,.xls,.csv" hidden />
+          <div class="dz-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 18v-6"/><path d="m9 15 3-3 3 3"/></svg>
+          </div>
+          <div class="dz-title">Drop the Odoo export here, or <span class="link">browse</span></div>
+          <div class="dz-sub">.xlsx · .xls · .csv. The file is read in your browser and never uploaded anywhere.</div>
+        </label>
+
+        <div id="upload-summary" class="card hidden">
+          <div class="card-head">
+            <div class="file-badge">
+              <span class="file-ico">XLS</span>
+              <div>
+                <div id="sum-file" class="file-name"></div>
+                <div id="sum-time" class="tiny muted"></div>
+              </div>
+            </div>
+            <button id="replace-file" class="btn btn-ghost btn-sm">Replace file</button>
+          </div>
+
+          <div class="mini-stats">
+            <div><span id="sum-items" class="ms-v">0</span><span class="ms-l">Serial items</span></div>
+            <div><span id="sum-products" class="ms-v">0</span><span class="ms-l">Products</span></div>
+            <div><span id="sum-locations" class="ms-v">0</span><span class="ms-l">Locations</span></div>
+          </div>
+
+          <div id="sum-warnings"></div>
+
+          <div class="loc-block">
+            <div class="loc-head">
+              <div>
+                <h3>Locations to count</h3>
+                <p class="tiny muted">Untick any location you are not counting today. Serials from unticked locations are flagged if you scan them.</p>
+              </div>
+              <div class="loc-tools">
+                <button class="link-btn" id="loc-all">Select all</button>
+                <button class="link-btn" id="loc-none">Clear</button>
+              </div>
+            </div>
+            <div id="loc-list" class="loc-list"></div>
+          </div>
+
+          <div class="card-foot">
+            <span id="scope-note" class="muted"></span>
+            <button id="start-scan" class="btn btn-primary btn-lg">Start scanning <span aria-hidden="true">→</span></button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- STEP 2 : SCAN ---------- -->
+      <section id="view-scan" class="view hidden">
+        <div class="view-head">
+          <div>
+            <h1>Scan stock</h1>
+            <p class="muted">Scan each QR code with the scanner gun or the camera. Every scan is checked against the report straight away.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-secondary" data-goto="report">View report</button>
+          </div>
+        </div>
+
+        <div class="scan-grid">
+          <div class="scan-main">
+            <div id="scan-card" class="card scan-card">
+              <div class="scan-ready">
+                <span id="ready-dot" class="dot"></span>
+                <span id="ready-text">Ready to scan</span>
+              </div>
+              <form id="scan-form" class="scan-form" autocomplete="off">
+                <svg class="scan-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+                <input id="scan-input" type="text" placeholder="Scan or type a serial number, then press Enter" spellcheck="false" autocapitalize="off" autocomplete="off" />
+                <button type="submit" class="btn btn-primary">Add</button>
+              </form>
+
+              <div id="feedback" class="feedback idle">
+                <div class="fb-icon" id="fb-icon"></div>
+                <div class="fb-body">
+                  <div id="fb-title" class="fb-title">Waiting for first scan</div>
+                  <div id="fb-sub" class="fb-sub">Scan a QR label. The result shows up here.</div>
+                </div>
+              </div>
+
+              <div class="scan-tools">
+                <button id="camera-btn" class="btn btn-ghost btn-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  <span id="camera-label">Use camera</span>
+                </button>
+                <button id="sound-btn" class="btn btn-ghost btn-sm" aria-pressed="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path id="sound-wave" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
+                  <span id="sound-label">Sound on</span>
+                </button>
+                <button id="undo-btn" class="btn btn-ghost btn-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+                  Undo last scan
+                </button>
+              </div>
+              <div id="camera-wrap" class="camera-wrap hidden">
+                <div id="camera-box"></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <h3>Recent scans</h3>
+                <span id="recent-count" class="tiny muted"></span>
+              </div>
+              <ul id="recent-list" class="recent-list"></ul>
+            </div>
+          </div>
+
+          <aside class="scan-side">
+            <div class="card progress-card">
+              <div class="ring-wrap">
+                <svg class="ring" viewBox="0 0 120 120">
+                  <circle class="ring-bg" cx="60" cy="60" r="52" />
+                  <circle id="ring-fg" class="ring-fg" cx="60" cy="60" r="52" />
+                </svg>
+                <div class="ring-label">
+                  <div id="ring-pct" class="ring-pct">0%</div>
+                  <div class="tiny muted">counted</div>
+                </div>
+              </div>
+              <div class="pc-stats">
+                <div class="pc-row"><span class="pill pill-green"></span>Found<b id="st-found">0</b></div>
+                <div class="pc-row"><span class="pill pill-red"></span>Not yet scanned<b id="st-missing">0</b></div>
+                <div class="pc-row"><span class="pill pill-violet"></span>Not in report<b id="st-unknown">0</b></div>
+                <div class="pc-row"><span class="pill pill-blue"></span>Other location<b id="st-other">0</b></div>
+              </div>
+              <div class="pc-total"><span id="st-expected">0</span> items expected</div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <h3>By product</h3>
+                <input id="prod-filter" class="input-sm" type="search" placeholder="Filter…" />
+              </div>
+              <ul id="product-progress" class="product-progress"></ul>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ---------- STEP 3 : REPORT ---------- -->
+      <section id="view-report" class="view hidden">
         <div class="print-header">
           <img src="assets/logo.png" alt="BatteryLab" />
           <div>
