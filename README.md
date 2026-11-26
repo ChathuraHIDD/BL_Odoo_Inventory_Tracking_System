@@ -25,9 +25,13 @@ Sign in as the inventory admin (`odooadmin`).
    - **Not in stock report**: an exception (red)
 
    Scans can be removed one by one or with *Undo last scan*. You can paste many serials at once (one per line).
-3. **Report**: Found / Missing for every item, a summary by product, and the exceptions.
-   **Export Excel** creates a workbook with these sheets: Summary, Full Report (✔ FOUND / ✘ MISSING), Missing, Found,
-   By Product, Exceptions and the complete Scan Log. **Print / PDF** gives a clean printable version.
+3. **Report**: the uploaded Odoo report exactly as exported (same columns, same order) plus a
+   **Physical Inventory** column: ✔ found / ✘ not found. The summary sits below it: totals, accuracy,
+   a by-product breakdown and any exceptions.
+   - **PDF report**: a branded A4 landscape document (logo, reference number, count details, the ✔/✘ table,
+     summary on its own page, sign-off lines, page numbers). Choose *Save as PDF* in the print dialog.
+   - **Export Excel**: sheets *Physical Inventory* (original columns + ✔/✘, summary underneath),
+     *Summary*, *Not Found*, *Not in Report* (only when there are exceptions) and the complete *Scan Log*.
 
 ## Data & storage
 

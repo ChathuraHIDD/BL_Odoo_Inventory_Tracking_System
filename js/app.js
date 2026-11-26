@@ -843,6 +843,15 @@
    * Step 3 — Report
    * ------------------------------------------------------------------ */
   const filt = { status: 'all', product: '', location: '', q: '' };
+  const FALLBACK_COLS = ['Location', 'Product', 'Lot/Serial Number', 'Quantity', 'Unit'];
+  const PI_COL = 'Physical Inventory';
+  const TICK = '✔';
+  const CROSS = '✘';
+  const SVG_TICK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>';
+  const SVG_CROSS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>';
+  const piIcon = (found) => (found
+    ? `<span class="pi pi-yes" title="Found">${SVG_TICK}</span>`
+    : `<span class="pi pi-no" title="Not found">${SVG_CROSS}</span>`);
 
   function itemRows() {
     return R.scope
@@ -852,18 +861,41 @@
       });
   }
 
+  /** Columns of the uploaded Odoo report, in the original order (older saved counts fall back to the main ones). */
+  const reportColumns = () => (S.columns && S.columns.length ? S.columns : FALLBACK_COLS);
+  const cellsOf = (it) => (it.cells && it.cells.length ? it.cells : [it.location, it.product, it.serial, it.qty, it.unit]);
+  const fmtCell = (v) => (typeof v === 'number' ? v.toLocaleString(undefined, { maximumFractionDigits: 4 }) : String(v ?? ''));
+
+  /** Columns worth showing on screen / PDF: every original column that has at least one value. */
+  function visibleColumns(rows) {
+    const cols = reportColumns();
+    const idx = cols.map((_, c) => c).filter((c) => rows.some((r) => String(cellsOf(r)[c] ?? '').trim() !== ''));
+    return idx.length ? idx : cols.map((_, c) => c);
+  }
+  const serialColIndex = () => reportColumns().findIndex((h) => /lot|serial/i.test(h));
+  const numericCol = (h) => /^(quantity|qty|counted|difference|on\s*hand|reserved|value)/i.test(String(h).trim());
+
+  function reportStamp(d = new Date()) {
+    const p = (n) => String(n).padStart(2, '0');
+    return {
+      file: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`,
+      ref: `PI-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`,
+    };
+  }
+  const accuracy = () => (R.expected ? (R.found / R.expected) * 100 : 0);
+
   function renderReport() {
     if (!S || !R) return;
     const meta = `${S.fileName} · Locations: ${S.selected.join(', ')} · Started ${fmtDateTime(S.startedAt)} · Generated ${fmtDateTime(Date.now())}`;
     $('#report-meta').textContent = meta;
-    $('#print-meta').textContent = meta + ' · Counted by odooadmin';
 
     $('#r-expected').textContent = fmtInt(R.expected);
     $('#r-found').textContent = fmtInt(R.found);
-    $('#r-found-s').textContent = R.expected ? `${((R.found / R.expected) * 100).toFixed(1)}% accuracy` : '';
+    $('#r-found-s').textContent = R.expected ? `${accuracy().toFixed(1)}% accuracy` : '';
     $('#r-missing').textContent = fmtInt(R.missing);
     $('#r-unknown').textContent = fmtInt(R.unknown);
     $('#r-other').textContent = fmtInt(R.other);
+    $('#sum-accuracy').textContent = R.expected ? `${accuracy().toFixed(1)}% of expected items physically verified` : '';
 
     // product summary
     $('#product-table tbody').innerHTML = R.products.map((p) => {
@@ -877,6 +909,13 @@
         <td><div class="prog-cell"><div class="bar ${pct === 100 ? 'complete' : ''}"><i style="width:${pct}%"></i></div><span>${Math.floor(pct)}%</span></div></td>
       </tr>`;
     }).join('');
+    $('#product-table tfoot').innerHTML = R.products.length > 1 ? `<tr>
+      <td>Total</td><td></td>
+      <td class="num">${fmtInt(R.expected)}</td>
+      <td class="num">${fmtInt(R.found)}</td>
+      <td class="num">${fmtInt(R.missing)}</td>
+      <td>${accuracy().toFixed(1)}%</td>
+    </tr>` : '';
 
     // filter dropdowns
     const fp = $('#f-product');
@@ -904,13 +943,19 @@
       b.querySelector('span').textContent = fmtInt(counts[b.dataset.status]);
     });
     const list = base.filter((r) => filt.status === 'all' || (filt.status === 'found' ? r.found : !r.found));
-    $('#detail-table tbody').innerHTML = list.map((r, i) => `<tr>
+
+    const cols = reportColumns();
+    const vis = visibleColumns(rows);
+    const sc = serialColIndex();
+    $('#detail-table thead').innerHTML = `<tr><th class="num">#</th>${vis.map((c) => `<th class="${numericCol(cols[c]) ? 'num' : ''}">${esc(cols[c])}</th>`).join('')}<th class="c-pi">${PI_COL}</th></tr>`;
+    $('#detail-table tbody').innerHTML = list.map((r, i) => {
+      const cells = cellsOf(r);
+      return `<tr class="${r.found ? '' : 'row-miss'}">
       <td class="num muted">${i + 1}</td>
-      <td>${esc(r.location)}</td>
-      <td><div class="t-prod">${esc(r.product)}</div></td>
-      <td class="mono">${esc(r.serial)}</td>
-      <td>${r.found ? '<span class="badge badge-found">Found</span>' : '<span class="badge badge-missing">Not Found</span>'}</td>
-    </tr>`).join('');
+      ${vis.map((c) => `<td class="${c === sc ? 'mono' : numericCol(cols[c]) ? 'num' : ''}">${esc(fmtCell(cells[c]))}</td>`).join('')}
+      <td class="c-pi">${piIcon(r.found)}</td>
+    </tr>`;
+    }).join('');
     $('#detail-empty').classList.toggle('hidden', list.length > 0);
   }
 
@@ -928,41 +973,257 @@
     </tr>`).join('');
   }
 
+  /* ---------- Excel ---------- */
+  const SCAN_LABEL = { found: 'Found', duplicate: 'Already scanned', other: 'Other location', unknown: 'Not in report' };
+  const fmtFull = (t) => (t ? new Date(t).toLocaleString([], { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+
+  /** Summary block (rows) used below the report and on its own sheet. */
+  function summaryRows(now) {
+    const rows = [
+      ['PHYSICAL INVENTORY SUMMARY'],
+      ['Report file', S.fileName],
+      ['Locations counted', S.selected.join(', ')],
+      ['Count started', fmtDateTime(S.startedAt)],
+      ['Generated', fmtDateTime(now)],
+      [],
+      ['Expected items', R.expected],
+      [`${TICK} Found`, R.found],
+      [`${CROSS} Not found`, R.missing],
+      ['Accuracy', `${accuracy().toFixed(1)}%`],
+      ['Scanned, not in report', R.unknown],
+      ['Scanned, other location', R.other],
+      ['Duplicate scans (not counted)', R.dup],
+      [],
+      ['Product', 'Code', 'Expected', `${TICK} Found`, `${CROSS} Not found`, 'Progress'],
+    ];
+    for (const p of R.products) rows.push([p.name, p.code, p.expected, p.found, p.expected - p.found, `${p.expected ? Math.floor((p.found / p.expected) * 100) : 0}%`]);
+    rows.push(['TOTAL', '', R.expected, R.found, R.missing, `${accuracy().toFixed(1)}%`]);
+    rows.push([], [`Legend: ${TICK} = physically found and scanned · ${CROSS} = on the stock report but not found`]);
+    return rows;
+  }
+
+  function fitCols(aoa, max = 48) {
+    const width = Math.max(1, ...aoa.map((r) => r.length));
+    return Array.from({ length: width }, (_, c) => ({
+      wch: Math.min(max, Math.max(8, ...aoa.slice(0, 400).map((r) => String(r[c] ?? '').length)) + 2),
+    }));
+  }
+
   function exportExcel() {
     if (typeof XLSX === 'undefined') { toast('Spreadsheet library not loaded.'); return; }
     const now = new Date();
-    // Older saved counts have no original columns: fall back to the main ones.
-    const columns = S.columns && S.columns.length ? S.columns : ['Location', 'Product', 'Lot/Serial Number', 'Quantity', 'Unit'];
-    const cellsOf = (it) => (it.cells && it.cells.length ? it.cells : [it.location, it.product, it.serial, it.qty, it.unit]);
-
-    // Sheet 1: exactly the uploaded report (same columns, same order) + Status
-    const report = [[...columns, 'Status']];
-    for (const it of itemRows()) report.push([...columns.map((_, c) => cellsOf(it)[c] ?? ''), it.found ? 'Found' : 'Not Found']);
-    const ws = XLSX.utils.aoa_to_sheet(report);
-    ws['!cols'] = [...columns, 'Status'].map((h, c) => ({
-      wch: Math.min(48, Math.max(String(h).length, ...report.slice(1, 300).map((r) => String(r[c] ?? '').length)) + 2),
-    }));
-    ws['!autofilter'] = { ref: ws['!ref'] };
+    const columns = reportColumns();
+    const rows = itemRows();
+    const header = [...columns, PI_COL];
+    const line = (it) => [...columns.map((_, c) => cellsOf(it)[c] ?? ''), it.found ? TICK : CROSS];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Stock Count');
 
-    // Sheet 2 (only when needed): labels scanned that are not on the counted report
+    // Sheet 1: the uploaded report exactly as it was + Physical Inventory ✔/✘, summary underneath
+    const report = [header, ...rows.map(line)];
+    const dataEnd = report.length;
+    report.push([], [], ...summaryRows(now));
+    const ws = XLSX.utils.aoa_to_sheet(report);
+    ws['!cols'] = fitCols(report.slice(0, dataEnd));
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: dataEnd - 1, c: header.length - 1 } }) };
+    XLSX.utils.book_append_sheet(wb, ws, 'Physical Inventory');
+
+    // Sheet 2: summary on its own
+    const ws2 = XLSX.utils.aoa_to_sheet(summaryRows(now));
+    ws2['!cols'] = [{ wch: 34 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 13 }, { wch: 11 }];
+    XLSX.utils.book_append_sheet(wb, ws2, 'Summary');
+
+    // Sheet 3: only the items not found
+    const miss = [header, ...rows.filter((r) => !r.found).map(line)];
+    const ws3 = XLSX.utils.aoa_to_sheet(miss);
+    ws3['!cols'] = fitCols(miss);
+    if (miss.length > 1) ws3['!autofilter'] = { ref: ws3['!ref'] };
+    XLSX.utils.book_append_sheet(wb, ws3, 'Not Found');
+
+    // Sheet 4 (only when needed): labels scanned that are not on the counted report
     if (R.exceptions.length) {
-      const extra = [['Lot/Serial Number', 'Product', 'Location', 'Status']];
+      const extra = [['Lot/Serial Number', 'Product', 'Location', 'Status', 'Times scanned', 'First scanned']];
       for (const e of R.exceptions) {
         extra.push(e.item
-          ? [e.item.serial, e.item.product, e.item.location, 'Scanned – location not counted']
-          : [e.raw, '', '', 'Scanned – not in report']);
+          ? [e.item.serial, e.item.product, e.item.location, 'Scanned – location not counted', e.count, fmtFull(e.first)]
+          : [e.raw, '', '', 'Scanned – not in report', e.count, fmtFull(e.first)]);
       }
-      const ws2 = XLSX.utils.aoa_to_sheet(extra);
-      ws2['!cols'] = [{ wch: 28 }, { wch: 44 }, { wch: 28 }, { wch: 30 }];
-      XLSX.utils.book_append_sheet(wb, ws2, 'Not in Report');
+      const ws4 = XLSX.utils.aoa_to_sheet(extra);
+      ws4['!cols'] = fitCols(extra);
+      XLSX.utils.book_append_sheet(wb, ws4, 'Not in Report');
     }
 
-    const p = (n) => String(n).padStart(2, '0');
-    const stamp = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}_${p(now.getHours())}${p(now.getMinutes())}`;
-    XLSX.writeFile(wb, `Stock_Count_${stamp}.xlsx`);
+    // Sheet 5: every scan, in order (audit trail)
+    const log = [['#', 'Scanned at', 'Scanned value', 'Matched serial', 'Product', 'Result', 'Source']];
+    S.scans.forEach((sc, i) => {
+      const idx = index.get(sc.key);
+      const it = idx === undefined ? null : S.items[idx];
+      log.push([i + 1, fmtFull(sc.t), sc.raw, it ? it.serial : '', it ? it.product : '', SCAN_LABEL[R.scanStatus.get(sc.id)] || '', sc.src || '']);
+    });
+    const ws5 = XLSX.utils.aoa_to_sheet(log);
+    ws5['!cols'] = fitCols(log);
+    if (log.length > 1) ws5['!autofilter'] = { ref: ws5['!ref'] };
+    XLSX.utils.book_append_sheet(wb, ws5, 'Scan Log');
+
+    XLSX.writeFile(wb, `Physical_Inventory_Report_${reportStamp(now).file}.xlsx`);
     toast('Excel report downloaded');
+  }
+
+  /* ---------- Branded PDF (print-ready document, saved with "Save as PDF") ---------- */
+  function buildPdfHtml(now) {
+    const rows = itemRows();
+    const cols = reportColumns();
+    const vis = visibleColumns(rows);
+    const sc = serialColIndex();
+    const { ref } = reportStamp(now);
+    const logo = new URL('assets/logo.png', location.href).href;
+    const acc = accuracy();
+    const cls = (c) => (c === sc ? 'mono' : numericCol(cols[c]) ? 'num' : '');
+
+    const body = rows.map((r, i) => {
+      const cells = cellsOf(r);
+      return `<tr class="${r.found ? '' : 'miss'}"><td class="num idx">${i + 1}</td>${vis.map((c) => `<td class="${cls(c)}">${esc(fmtCell(cells[c]))}</td>`).join('')}<td class="pi-c">${piIcon(r.found)}</td></tr>`;
+    }).join('');
+
+    const prodRows = R.products.map((p) => {
+      const pct = p.expected ? (p.found / p.expected) * 100 : 0;
+      return `<tr><td><b>${esc(p.name)}</b></td><td class="mono">${esc(p.code)}</td><td class="num">${fmtInt(p.expected)}</td><td class="num ok">${fmtInt(p.found)}</td><td class="num ${p.expected - p.found ? 'bad' : ''}">${fmtInt(p.expected - p.found)}</td><td><div class="bar"><i style="width:${pct}%"></i></div></td><td class="num">${Math.floor(pct)}%</td></tr>`;
+    }).join('');
+
+    const exc = R.exceptions.length ? `
+      <h3>Exceptions: scanned but not expected</h3>
+      <table class="grid"><thead><tr><th>Type</th><th>Scanned value</th><th>Product</th><th>Report location</th><th class="num">Scans</th><th>First scanned</th></tr></thead><tbody>
+      ${R.exceptions.map((e) => `<tr><td>${e.type === 'unknown' ? 'Not in report' : 'Other location'}</td><td class="mono">${esc(e.item ? e.item.serial : e.raw)}</td><td>${e.item ? esc(e.item.name) : '—'}</td><td>${e.item ? esc(e.item.location) : '—'}</td><td class="num">${e.count}</td><td>${esc(fmtFull(e.first))}</td></tr>`).join('')}
+      </tbody></table>` : '';
+
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Physical_Inventory_Report_${esc(reportStamp(now).file)}</title><style>
+      @page { size: A4 landscape; margin: 12mm 11mm 14mm;
+        @bottom-left { content: "BatteryLab · Physical Inventory Report · ${ref}"; font: 8px Helvetica, Arial, sans-serif; color: #8a98a5; }
+        @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8px Helvetica, Arial, sans-serif; color: #8a98a5; } }
+      * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      body { margin: 0; font: 9.5px/1.4 "Inter", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #1f2a33; }
+      .mono { font-family: "JetBrains Mono", Menlo, Consolas, monospace; font-size: 9px; }
+      .num { text-align: right; font-variant-numeric: tabular-nums; }
+      .brandbar { height: 4px; background: linear-gradient(90deg, #2f3e4a 0 34%, #3ba7e6 34% 67%, #6dc24b 67%); border-radius: 2px; }
+      header { display: flex; justify-content: space-between; align-items: center; padding: 12px 0 10px; }
+      header img { height: 38px; }
+      .ttl { text-align: right; }
+      .ttl h1 { margin: 0; font-size: 17px; letter-spacing: .08em; text-transform: uppercase; color: #2f3e4a; }
+      .ttl div { color: #6b7a88; font-size: 9px; margin-top: 2px; }
+      .meta { display: flex; border: 1px solid #e3e8ed; border-radius: 6px; margin-bottom: 12px; }
+      .meta div { flex: 1 1 auto; padding: 6px 10px; border-right: 1px solid #e3e8ed; }
+      .meta div:last-child { border-right: 0; }
+      .meta span { display: block; font-size: 7.5px; text-transform: uppercase; letter-spacing: .08em; color: #8a98a5; font-weight: 700; }
+      .meta b { font-size: 9.5px; color: #1f2a33; font-weight: 650; }
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #2f3e4a; margin: 0 0 6px; padding-left: 7px; border-left: 3px solid #3ba7e6; }
+      h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: #4a5b69; margin: 14px 0 6px; }
+      table.grid { width: 100%; border-collapse: collapse; }
+      .grid th { background: #2f3e4a; color: #fff; font-size: 8px; text-transform: uppercase; letter-spacing: .05em; text-align: left; padding: 5px 7px; font-weight: 700; }
+      .grid th.num { text-align: right; }
+      .grid td { padding: 4px 7px; border-bottom: 1px solid #eef2f5; vertical-align: middle; }
+      .grid tbody tr:nth-child(even) td { background: #f8fafb; }
+      .grid tr { break-inside: avoid; }
+      .grid tr.miss td { background: #fdf1f1; }
+      .grid tfoot td { font-weight: 800; border-top: 1.5px solid #2f3e4a; border-bottom: 0; background: #fff; }
+      .idx { color: #8a98a5; width: 1%; }
+      .grid .pi-c { text-align: center; width: 1%; white-space: nowrap; }
+      .pi { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; color: #fff; vertical-align: middle; }
+      .pi svg { width: 9px; height: 9px; }
+      .pi-yes { background: #4fae2e; }
+      .pi-no { background: #d93b3b; }
+      .summary { break-before: page; }
+      .kpis { display: flex; gap: 8px; margin-bottom: 6px; }
+      .kpi { flex: 1; border: 1px solid #e3e8ed; border-top: 3px solid #2f3e4a; border-radius: 6px; padding: 8px 10px; }
+      .kpi.g { border-top-color: #6dc24b; } .kpi.r { border-top-color: #d93b3b; } .kpi.b { border-top-color: #3ba7e6; } .kpi.v { border-top-color: #7a4fd6; }
+      .kpi span { font-size: 7.5px; text-transform: uppercase; letter-spacing: .08em; color: #6b7a88; font-weight: 700; }
+      .kpi b { display: block; font-size: 20px; color: #1f2a33; margin-top: 2px; }
+      .kpi small { color: #8a98a5; }
+      .ok { color: #2f7d17; font-weight: 700; } .bad { color: #b12a2a; font-weight: 700; }
+      .bar { height: 6px; background: #eef2f5; border-radius: 3px; overflow: hidden; min-width: 90px; }
+      .bar i { display: block; height: 100%; background: #6dc24b; }
+      .legend { margin-top: 8px; color: #6b7a88; display: flex; gap: 16px; align-items: center; }
+      .legend span { display: inline-flex; gap: 5px; align-items: center; }
+      .sign { display: flex; gap: 28px; margin-top: 34px; break-inside: avoid; }
+      .sign div { flex: 1; border-top: 1px solid #4a5b69; padding-top: 5px; color: #4a5b69; font-weight: 650; }
+      .sign small { display: block; color: #8a98a5; font-weight: 400; margin-top: 2px; }
+    </style></head><body>
+      <div class="brandbar"></div>
+      <header>
+        <img src="${esc(logo)}" alt="BatteryLab">
+        <div class="ttl"><h1>Physical Inventory Report</h1><div>Ref. ${esc(ref)} · Generated ${esc(fmtDateTime(now))}</div></div>
+      </header>
+      <div class="meta">
+        <div><span>Source report</span><b>${esc(S.fileName)}</b></div>
+        <div><span>Locations counted</span><b>${esc(S.selected.join(', '))}</b></div>
+        <div><span>Count started</span><b>${esc(fmtDateTime(S.startedAt))}</b></div>
+        <div><span>Items</span><b>${fmtInt(R.expected)} expected · ${fmtInt(R.found)} found</b></div>
+        <div><span>Accuracy</span><b>${acc.toFixed(1)}%</b></div>
+      </div>
+
+      <h2>Stock report · physical inventory status</h2>
+      <table class="grid">
+        <thead><tr><th class="num">#</th>${vis.map((c) => `<th class="${numericCol(cols[c]) ? 'num' : ''}">${esc(cols[c])}</th>`).join('')}<th class="pi-c">${PI_COL}</th></tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+      <div class="legend"><span>${piIcon(true)} Physically found and scanned</span><span>${piIcon(false)} On the stock report, not found</span></div>
+
+      <section class="summary">
+        <h2>Summary</h2>
+        <div class="kpis">
+          <div class="kpi"><span>Expected</span><b>${fmtInt(R.expected)}</b><small>items on the report</small></div>
+          <div class="kpi g"><span>${TICK} Found</span><b>${fmtInt(R.found)}</b><small>${acc.toFixed(1)}% accuracy</small></div>
+          <div class="kpi r"><span>${CROSS} Not found</span><b>${fmtInt(R.missing)}</b><small>on report, not scanned</small></div>
+          <div class="kpi v"><span>Not in report</span><b>${fmtInt(R.unknown)}</b><small>scanned, not on report</small></div>
+          <div class="kpi b"><span>Other location</span><b>${fmtInt(R.other)}</b><small>on report, outside scope</small></div>
+        </div>
+        <h3>By product</h3>
+        <table class="grid">
+          <thead><tr><th>Product</th><th>Code</th><th class="num">Expected</th><th class="num">${TICK} Found</th><th class="num">${CROSS} Not found</th><th>Progress</th><th class="num">%</th></tr></thead>
+          <tbody>${prodRows}</tbody>
+          <tfoot><tr><td>Total</td><td></td><td class="num">${fmtInt(R.expected)}</td><td class="num ok">${fmtInt(R.found)}</td><td class="num ${R.missing ? 'bad' : ''}">${fmtInt(R.missing)}</td><td><div class="bar"><i style="width:${acc}%"></i></div></td><td class="num">${acc.toFixed(1)}%</td></tr></tfoot>
+        </table>
+        ${exc}
+        <div class="sign">
+          <div>Counted by<small>Name, signature &amp; date</small></div>
+          <div>Verified by<small>Name, signature &amp; date</small></div>
+          <div>Approved by<small>Name, signature &amp; date</small></div>
+        </div>
+      </section>
+    </body></html>`;
+  }
+
+  function exportPdf() {
+    if (!S || !R) return;
+    const now = new Date();
+    const old = $('#pdf-frame');
+    if (old) old.remove();
+    const frame = document.createElement('iframe');
+    frame.id = 'pdf-frame';
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument;
+    doc.open();
+    doc.write(buildPdfHtml(now));
+    doc.close();
+
+    const title = document.title;
+    let printed = false;
+    const go = () => {
+      if (printed) return;
+      printed = true;
+      // the browser suggests the PDF file name from the page title
+      document.title = `Physical_Inventory_Report_${reportStamp(now).file}`;
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+      setTimeout(() => { document.title = title; }, 1000);
+    };
+    const pending = Array.from(doc.images).filter((im) => !im.complete);
+    let left = pending.length;
+    const done = () => { if (--left <= 0) go(); };
+    pending.forEach((im) => { im.addEventListener('load', done); im.addEventListener('error', done); });
+    if (!left) setTimeout(go, 50);
+    setTimeout(go, 2500); // never wait forever for the logo
+    toast('Choose "Save as PDF" in the print dialog');
   }
 
   function initReport() {
@@ -984,7 +1245,7 @@
       if (filt.product) $('#detail-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
     $('#export-btn').addEventListener('click', exportExcel);
-    $('#print-btn').addEventListener('click', () => window.print());
+    $('#pdf-btn').addEventListener('click', exportPdf);
     $('#new-count').addEventListener('click', async () => {
       const ok = await confirmDialog({
         title: 'Start a new count?',
