@@ -165,37 +165,42 @@
         <div class="scan-grid">
           <div class="scan-main">
             <div id="scan-card" class="card scan-card">
-              <div class="scan-ready">
-                <span id="ready-dot" class="dot"></span>
-                <span id="ready-text">Ready to scan</span>
-              </div>
-              <form id="scan-form" class="scan-form" autocomplete="off">
-                <svg class="scan-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
-                <input id="scan-input" type="text" placeholder="Scan or type a serial number, then press Enter" spellcheck="false" autocapitalize="off" autocomplete="off" />
-                <button type="submit" class="btn btn-primary">Add</button>
-              </form>
+              <div class="scan-layout">
+                <aside id="live" class="live idle" aria-live="polite"></aside>
+                <div class="scan-body">
+                  <div class="scan-ready">
+                    <span id="ready-dot" class="dot"></span>
+                    <span id="ready-text">Ready to scan</span>
+                  </div>
+                  <form id="scan-form" class="scan-form" autocomplete="off">
+                    <svg class="scan-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+                    <input id="scan-input" type="text" placeholder="Scan or type a serial number, then press Enter" spellcheck="false" autocapitalize="off" autocomplete="off" />
+                    <button type="submit" class="btn btn-primary">Add</button>
+                  </form>
 
-              <div id="feedback" class="feedback idle">
-                <div class="fb-icon" id="fb-icon"></div>
-                <div class="fb-body">
-                  <div id="fb-title" class="fb-title">Waiting for first scan</div>
-                  <div id="fb-sub" class="fb-sub">Scan a QR label. The result shows up here.</div>
+                  <div id="feedback" class="feedback idle">
+                    <div class="fb-icon" id="fb-icon"></div>
+                    <div class="fb-body">
+                      <div id="fb-title" class="fb-title">Waiting for first scan</div>
+                      <div id="fb-sub" class="fb-sub">Scan a QR label. The result shows up here.</div>
+                    </div>
+                  </div>
+
+                  <div class="scan-tools">
+                    <button id="camera-btn" class="btn btn-ghost btn-sm">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                      <span id="camera-label">Use camera</span>
+                    </button>
+                    <button id="sound-btn" class="btn btn-ghost btn-sm" aria-pressed="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path id="sound-wave" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
+                      <span id="sound-label">Sound on</span>
+                    </button>
+                    <button id="undo-btn" class="btn btn-ghost btn-sm">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+                      Undo last scan
+                    </button>
+                  </div>
                 </div>
-              </div>
-
-              <div class="scan-tools">
-                <button id="camera-btn" class="btn btn-ghost btn-sm">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                  <span id="camera-label">Use camera</span>
-                </button>
-                <button id="sound-btn" class="btn btn-ghost btn-sm" aria-pressed="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path id="sound-wave" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
-                  <span id="sound-label">Sound on</span>
-                </button>
-                <button id="undo-btn" class="btn btn-ghost btn-sm">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
-                  Undo last scan
-                </button>
               </div>
               <div id="camera-wrap" class="camera-wrap hidden">
                 <div id="camera-box"></div>

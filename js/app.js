@@ -146,6 +146,19 @@
     } catch { /* audio not available */ }
   }
 
+  /** Spoken notice (browser text-to-speech). Follows the Sound on/off button. */
+  function speak(text) {
+    if (!prefs.sound || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel(); // never queue up behind an older message
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'en-US';
+      u.rate = 1.05;
+      u.volume = 1;
+      window.speechSynthesis.speak(u);
+    } catch { /* speech not available */ }
+  }
+
   /* ------------------------------------------------------------------
    * Authentication
    * ------------------------------------------------------------------ */
@@ -214,23 +227,34 @@
    * ------------------------------------------------------------------ */
   let S = null;
   let index = new Map(); // normalized serial -> item index
+  let looseIndex = new Map(); // letters+digits only -> normalized serial (null when two serials collide)
   let R = null; // derived results (see compute())
+
+  /** Letters and digits only. Scanner guns set to another keyboard layout often mistype "-" and "/". */
+  const loose = (v) => String(v ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
   function rebuildIndex() {
     index = new Map();
+    looseIndex = new Map();
     if (!S) return;
-    S.items.forEach((it, i) => index.set(it.key, i));
+    S.items.forEach((it, i) => {
+      index.set(it.key, i);
+      const l = loose(it.key);
+      if (l) looseIndex.set(l, looseIndex.has(l) && looseIndex.get(l) !== it.key ? null : it.key);
+    });
   }
 
   function loadSession() {
     S = safeGet(localStorage, STORE_KEY);
     if (S && !Array.isArray(S.items)) S = null;
+    rebuildIndex();
     if (S) {
+      // re-match saved scans with the current rules (e.g. serials scanned with a mistyped "-" or "/")
+      S.scans = (S.scans || []).map((sc) => ({ ...sc, key: resolveKey(sc.raw) || sc.key }));
       // one record per serial: drop any repeat scans saved by older versions
       const seen = new Set();
-      S.scans = (S.scans || []).filter((sc) => !seen.has(sc.key) && seen.add(sc.key));
+      S.scans = S.scans.filter((sc) => !seen.has(sc.key) && seen.add(sc.key));
     }
-    rebuildIndex();
     compute();
   }
 
@@ -252,11 +276,16 @@
   function resolveKey(raw) {
     const k = norm(raw);
     if (!k || index.has(k)) return k;
-    // QR codes sometimes carry more than the serial (URL, "serial|product", key=value …).
+    // same serial with "-" or "/" mistyped or missing (scanner keyboard layout)
+    const byLoose = (v) => { const l = loose(v); return l ? looseIndex.get(l) : undefined; };
+    let hit = byLoose(raw);
+    if (hit) return hit;
+    // QR codes sometimes carry more than the serial (URL, "serial|product", key=value, JSON …).
     let text = String(raw);
     try { text = decodeURIComponent(text); } catch { /* keep raw */ }
-    const tokens = text.split(/[\s,;|\t\r\n?&=#]+/).map(norm).filter(Boolean);
+    const tokens = text.split(/[\s,;|\t\r\n?&=#"'{}\[\]()<>:]+/).map(norm).filter(Boolean);
     for (const t of tokens) if (index.has(t)) return t;
+    for (const t of tokens) if ((hit = byLoose(t))) return hit;
     // URL path: try the last segments joined (serials can contain "/")
     const segs = text.split('/').map(norm).filter(Boolean);
     for (let n = 1; n <= Math.min(3, segs.length); n++) {
@@ -596,6 +625,7 @@
   const R_MARK = { found: '✓', duplicate: '2×', unknown: '!', other: '⌖' };
 
   let lastHitProduct = null;
+  let liveProduct = null; // product shown in the live counter (product of the latest scan)
 
   function addScan(raw, src = 'scanner', quiet = false) {
     const text = String(raw ?? '').trim();
@@ -604,9 +634,14 @@
     if (!key) return null;
     const existing = S.scans.find((sc) => sc.key === key);
     if (existing) {
-      const status = R.scanStatus.get(existing.id);
-      if (!quiet) { showFeedback(existing, status); beep(status); }
-      return status;
+      if (!quiet) {
+        showFeedback(existing, 'duplicate');
+        beep('duplicate');
+        speak('Already scanned');
+        setLive(existing);
+        renderLive(true);
+      }
+      return 'duplicate';
     }
     const scan = { id: uid(), raw: text, key, t: Date.now(), src };
     S.scans.push(scan);
@@ -616,6 +651,7 @@
       saveSession();
       showFeedback(scan, status);
       beep(status);
+      setLive(scan);
       renderScan(scan.id);
     }
     return status;
@@ -629,6 +665,9 @@
     if (status === 'found') {
       title = 'Matched';
       sub = `<span class="mono">${esc(it.serial)}</span> · ${esc(it.name)}${it.code ? ` <span class="muted">(${esc(it.code)})</span>` : ''} · ${esc(it.location)}`;
+    } else if (status === 'duplicate') {
+      title = 'Already scanned';
+      sub = `<span class="mono">${esc(it ? it.serial : scan.raw)}</span>${it ? ` · ${esc(it.name)}` : ''} · first scanned at ${fmtTime(scan.t)}. Not counted again.`;
     } else if (status === 'other') {
       title = 'On report, but in a location you are not counting';
       sub = `<span class="mono">${esc(it.serial)}</span> · ${esc(it.name)} · Odoo location: <strong>${esc(it.location)}</strong>`;
@@ -636,7 +675,7 @@
       title = 'Not in stock report';
       sub = `<span class="mono">${esc(scan.raw)}</span> is not on the uploaded Odoo report. It is listed under exceptions.`;
     }
-    const cls = status === 'found' ? 'found' : status === 'other' ? 'other' : 'unknown';
+    const cls = ['found', 'duplicate', 'other'].includes(status) ? status : 'unknown';
     fb.className = `feedback ${cls}`;
     $('#fb-icon').innerHTML = ICONS[cls];
     $('#fb-title').textContent = title;
@@ -647,6 +686,7 @@
   }
 
   function resetFeedback() {
+    liveProduct = null;
     $('#feedback').className = 'feedback idle';
     $('#fb-icon').innerHTML = ICONS.idle;
     $('#fb-title').textContent = 'Waiting for first scan';
@@ -691,7 +731,46 @@
       : '<li class="empty" style="display:block;border:0">No scans yet.</li>';
 
     renderProductProgress();
+    renderLive(!!newId);
     $('#undo-btn').disabled = !S.scans.length;
+  }
+
+  /** Remember which product the latest scan belongs to. */
+  function setLive(scan) {
+    const idx = index.get(scan.key);
+    if (idx !== undefined) liveProduct = S.items[idx].product;
+  }
+
+  /** Live counter beside the scan box: scanned so far vs. expected on the report, for the current product. */
+  function renderLive(bump = false) {
+    const box = $('#live');
+    if (!box || !S || !R) return;
+    if (!liveProduct || !R.products.some((p) => p.product === liveProduct)) {
+      // after a reload: continue with the product of the latest matched scan
+      liveProduct = null;
+      for (let i = S.scans.length - 1; i >= 0; i--) {
+        const idx = index.get(S.scans[i].key);
+        if (idx !== undefined && R.products.some((p) => p.product === S.items[idx].product)) { liveProduct = S.items[idx].product; break; }
+      }
+    }
+    const p = liveProduct && R.products.find((x) => x.product === liveProduct);
+    if (!p) {
+      box.className = 'live idle';
+      box.innerHTML = `<div class="live-l">Now scanning</div>
+        <div class="live-empty">Scan a label.<br>The product count shows here.</div>`;
+      return;
+    }
+    const left = p.expected - p.found;
+    const pct = p.expected ? (p.found / p.expected) * 100 : 0;
+    const done = left <= 0;
+    box.className = `live${done ? ' done' : ''}`;
+    box.innerHTML = `<div class="live-l">Now scanning</div>
+      <div class="live-name" title="${esc(p.product)}">${esc(p.name)}</div>
+      ${p.code ? `<div class="live-code">${esc(p.code)}</div>` : ''}
+      <div class="live-count${bump ? ' bump' : ''}"><b>${fmtInt(p.found)}</b><span>/ ${fmtInt(p.expected)}</span></div>
+      <div class="live-sub">scanned / in report</div>
+      <div class="bar ${done ? 'complete' : ''}"><i style="width:${pct}%"></i></div>
+      <div class="live-foot">${done ? '<strong>✔ All found</strong>' : `<strong>${fmtInt(left)}</strong> left`}<span>${Math.floor(pct)}%</span></div>`;
   }
 
   function renderProductProgress() {
