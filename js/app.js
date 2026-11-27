@@ -18,8 +18,8 @@
   const PREFS_KEY = 'bl_inv_prefs';
   const CAMERA_REPEAT_MS = 2500; // ignore the same code seen by the camera within this window
 
-  // Products counted by scanning every serial label. All other products are counted by hand (Manual count step).
-  // The choice can be changed per product on the Upload screen and is remembered on this computer.
+  // Fixed list of products counted by scanning every serial label (by product code, or by name when there is no code).
+  // Every other product is counted by hand (Manual count step). The list can be changed in Settings.
   const SCAN_CODES = [
     'BL-AQAX-001', 'BL-AQAX-006', 'BL-AQAX-007', 'BL-BAT-008', 'BL-P3A-011', 'BL-P3A-012', 'BL-P3A-015',
     'BL-BAT-001', 'BL-BAT-002', 'BL-BAT-003', 'BL-BAT-004', 'BL-BAT-005', 'BL-BAT-006', 'IMP_USED',
@@ -245,8 +245,10 @@
   function rebuildIndex() {
     index = new Map();
     looseIndex = new Map();
+    productKeys = new Map();
     if (!S) return;
     S.items.forEach((it, i) => {
+      if (!productKeys.has(it.product)) productKeys.set(it.product, productKey(it.code, it.name));
       if (!it.key) return;
       index.set(it.key, i);
       const l = loose(it.key);
@@ -254,25 +256,19 @@
     });
   }
 
-  /** 'scan' or 'manual' for a product. */
-  const modeOf = (product) => (S && S.mode && S.mode[product]) || 'manual';
+  /** Key used for the scan list: the product code, or the product name when there is no code. */
+  const productKey = (code, name) => String(code || name || '').trim().toUpperCase();
+  const SCAN_DEFAULT = [...SCAN_CODES, ...SCAN_NAMES];
+  const loadScanSet = () => new Set(Array.isArray(prefs.scanList) ? prefs.scanList : SCAN_DEFAULT);
+  let scanSet = loadScanSet();
+  let productKeys = new Map(); // product (as in the report) -> scan-list key
 
-  function defaultMode(it) {
-    const saved = prefs.modes && prefs.modes[it.product];
-    if (saved) return saved;
-    return SCAN_CODES.includes(String(it.code).toUpperCase()) || SCAN_NAMES.includes(String(it.name).trim().toUpperCase()) ? 'scan' : 'manual';
-  }
+  /** 'scan' or 'manual' for a product, from the scan list (Settings). */
+  const modeOf = (product) => (scanSet.has(productKeys.get(product) || productKey('', product)) ? 'scan' : 'manual');
 
-  /** Give every product a counting method; products with stock lines that have no serial can only be counted by hand. */
   function ensureModes() {
     if (!S) return;
-    S.mode = S.mode || {};
     S.manual = S.manual || {};
-    const noSerial = new Set(S.items.filter((it) => !it.key).map((it) => it.product));
-    for (const it of S.items) {
-      if (noSerial.has(it.product)) S.mode[it.product] = 'manual';
-      else if (!S.mode[it.product]) S.mode[it.product] = defaultMode(it);
-    }
   }
 
   function loadSession() {
@@ -428,7 +424,7 @@
   let currentView = 'upload';
 
   function setView(view) {
-    if (view !== 'upload' && !(S && S.started)) view = 'upload';
+    if (view !== 'upload' && view !== 'settings' && !(S && S.started)) view = 'upload';
     currentView = view;
     $$('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
     if (view !== 'scan') stopCamera();
@@ -441,6 +437,7 @@
       focusScan();
     }
     if (view === 'manual') renderManual();
+    if (view === 'settings') renderSettings();
     if (view === 'report') renderReport();
     window.scrollTo({ top: 0 });
   }
@@ -460,6 +457,7 @@
 
   function initNav() {
     $$('.step').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+    $('#settings-btn').addEventListener('click', () => setView('settings'));
     document.addEventListener('click', (e) => {
       const g = e.target.closest('[data-goto]');
       if (g) setView(g.dataset.goto);
@@ -633,15 +631,6 @@
       S.selected = S.locations.map((l) => l.name).filter((n) => set.has(n));
       afterScopeChange();
     });
-    $('#mode-list').addEventListener('click', (e) => {
-      const b = e.target.closest('button[data-mode]');
-      if (!b || b.disabled) return;
-      const product = b.closest('[data-product]').dataset.product;
-      S.mode[product] = b.dataset.mode;
-      prefs.modes = Object.assign({}, prefs.modes, { [product]: b.dataset.mode }); // remember for the next upload
-      safeSet(localStorage, PREFS_KEY, prefs);
-      afterScopeChange();
-    });
     $('#start-scan').addEventListener('click', () => {
       if (!S || !S.selected.length) return;
       if (!S.started) { S.started = true; S.startedAt = Date.now(); }
@@ -680,27 +669,6 @@
         <span class="loc-name">${esc(l.name)}</span>
         <span class="loc-count">${fmtInt(l.count)}</span>
       </label>`).join('');
-
-    // counting method per product (scan first, then manual)
-    const prods = new Map();
-    for (const it of S.items) {
-      let p = prods.get(it.product);
-      if (!p) { p = { product: it.product, name: it.name, code: it.code, n: 0, noSerial: false }; prods.set(it.product, p); }
-      p.n++;
-      if (!it.key) p.noSerial = true;
-    }
-    const plist = [...prods.values()].sort((a, b) => (modeOf(a.product) === modeOf(b.product) ? collator.compare(a.name, b.name) : modeOf(a.product) === 'scan' ? -1 : 1));
-    $('#mode-list').innerHTML = plist.map((p) => {
-      const m = modeOf(p.product);
-      return `<div class="mode-item">
-        <span class="mode-name" title="${esc(p.product)}">${esc(p.name)}${p.code ? `<small>${esc(p.code)}</small>` : ''}</span>
-        <span class="mode-n">${fmtInt(p.n)}</span>
-        <div class="seg seg-sm" data-product="${esc(p.product)}">
-          <button type="button" data-mode="scan" class="scan ${m === 'scan' ? 'active' : ''}" ${p.noSerial ? 'disabled title="Some stock lines have no serial number"' : ''}>Scan</button>
-          <button type="button" data-mode="manual" class="manual ${m === 'manual' ? 'active' : ''}">Manual</button>
-        </div>
-      </div>`;
-    }).join('');
 
     const btn = $('#start-scan');
     btn.disabled = !S.selected.length;
@@ -1100,6 +1068,79 @@
     tbody.addEventListener('focusin', (e) => { if (e.target.matches('.count-input')) e.target.select(); });
     let t;
     $('#man-filter').addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderManual, 120); });
+  }
+
+  /* ------------------------------------------------------------------
+   * Settings — which products are scanned and which are counted by hand
+   * ------------------------------------------------------------------ */
+  function renderSettings() {
+    const rows = new Map(); // key -> { key, name, code, n }
+    if (S) {
+      for (const it of S.items) {
+        const k = productKey(it.code, it.name);
+        const r = rows.get(k) || { key: k, name: it.name, code: it.code, n: 0 };
+        r.n++;
+        rows.set(k, r);
+      }
+    }
+    for (const k of scanSet) if (!rows.has(k)) rows.set(k, { key: k, name: '', code: k, n: null });
+    const all = [...rows.values()].sort((a, b) => collator.compare(a.name || a.code, b.name || b.code));
+    const item = (r, to) => `<li class="set-item">
+        <div class="set-name">${esc(r.name || r.code)}${r.name && r.code ? `<small>${esc(r.code)}</small>` : ''}</div>
+        ${r.n === null ? '<span class="set-n muted" title="Not in the loaded Odoo file">–</span>' : `<span class="set-n">${fmtInt(r.n)}</span>`}
+        <button type="button" class="btn btn-ghost btn-sm" data-key="${esc(r.key)}" data-label="${esc(r.name || r.code)}" data-to="${to}">${to === 'manual' ? 'Move to manual →' : '← Move to scan'}</button>
+      </li>`;
+    const scan = all.filter((r) => scanSet.has(r.key));
+    const manual = all.filter((r) => !scanSet.has(r.key));
+    $('#set-scan').innerHTML = scan.map((r) => item(r, 'manual')).join('') || '<li class="empty">No products are scanned.</li>';
+    $('#set-manual').innerHTML = manual.map((r) => item(r, 'scan')).join('')
+      || `<li class="empty">${S ? 'No products are counted by hand.' : 'Upload an Odoo file to see the other products.'}</li>`;
+    $('#set-scan-n').textContent = fmtInt(scan.length);
+    $('#set-manual-n').textContent = fmtInt(manual.length);
+    const custom = Array.isArray(prefs.scanList);
+    $('#set-state').textContent = custom ? 'Changed from the default list on this computer.' : 'Using the default list.';
+    $('#set-reset').disabled = !custom;
+  }
+
+  function applyScanList(list) {
+    if (list) prefs.scanList = [...list];
+    else prefs.scanList = undefined;
+    safeSet(localStorage, PREFS_KEY, prefs);
+    scanSet = loadScanSet();
+    compute();
+    renderSettings();
+  }
+
+  function initSettings() {
+    $('#view-settings').addEventListener('click', async (e) => {
+      const b = e.target.closest('button[data-key]');
+      if (!b) return;
+      const toScan = b.dataset.to === 'scan';
+      const ok = await confirmDialog({
+        title: 'Are you sure?',
+        body: toScan
+          ? `"${b.dataset.label}" will be counted by scanning every serial label instead of by hand. Any quantity typed in for it at Manual count will no longer be used.`
+          : `"${b.dataset.label}" will be counted by hand instead of by scanning. Scans already made for it will no longer be counted.`,
+        ok: toScan ? 'Yes, scan it' : 'Yes, count by hand',
+        danger: true,
+      });
+      if (!ok) return;
+      const set = new Set(scanSet);
+      toScan ? set.add(b.dataset.key) : set.delete(b.dataset.key);
+      applyScanList(set);
+      toast(`${b.dataset.label}: ${toScan ? 'scan' : 'manual count'}`);
+    });
+    $('#set-reset').addEventListener('click', async () => {
+      const ok = await confirmDialog({
+        title: 'Are you sure?',
+        body: 'This puts back the default list of scanned products. Every other product is counted by hand.',
+        ok: 'Yes, reset',
+        danger: true,
+      });
+      if (!ok) return;
+      applyScanList(null);
+      toast('Default list restored');
+    });
   }
 
   /* ------------------------------------------------------------------
@@ -1614,6 +1655,7 @@
     initUpload();
     initScan();
     initManual();
+    initSettings();
     initReport();
     // keep other open tabs of the app in sync (e.g. report open in a second tab)
     window.addEventListener('storage', (e) => {

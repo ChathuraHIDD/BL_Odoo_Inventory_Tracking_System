@@ -77,6 +77,10 @@
           <span class="avatar">OA</span>
           <span class="user-name">odooadmin</span>
         </div>
+        <button id="settings-btn" class="btn btn-ghost btn-sm" title="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </button>
         <button id="logout-btn" class="btn btn-ghost btn-sm">Sign out</button>
       </div>
     </header>
@@ -143,16 +147,6 @@
               </div>
             </div>
             <div id="loc-list" class="loc-list"></div>
-          </div>
-
-          <div class="loc-block">
-            <div class="loc-head">
-              <div>
-                <h3>How each product is counted</h3>
-                <p class="tiny muted"><b>Scan</b>: every serial label is scanned. <b>Manual</b>: counted by hand, quantity typed in at the Manual count step.</p>
-              </div>
-            </div>
-            <div id="mode-list" class="mode-list"></div>
           </div>
 
           <div class="card-foot">
@@ -293,6 +287,31 @@
             </table>
           </div>
           <div id="man-empty" class="empty hidden">No products are set to manual count. Change this on the Upload step.</div>
+        </div>
+      </section>
+
+      <!-- ---------- SETTINGS ---------- -->
+      <section id="view-settings" class="view hidden">
+        <div class="view-head">
+          <div>
+            <h1>Settings</h1>
+            <p class="muted">Which products are counted by scanning and which are counted by hand. This list is fixed; change it only if the way a product is counted changes. Changes apply on this computer.</p>
+          </div>
+          <div class="head-actions">
+            <button id="set-reset" class="btn btn-ghost">Reset to default</button>
+            <button class="btn btn-secondary" data-goto="upload">Done</button>
+          </div>
+        </div>
+        <p id="set-state" class="tiny muted"></p>
+        <div class="set-grid">
+          <div class="card">
+            <div class="card-head"><h3>Scanned <span class="muted">(<span id="set-scan-n">0</span>)</span></h3><span class="tiny muted">every serial label is scanned</span></div>
+            <ul id="set-scan" class="set-list"></ul>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Counted by hand <span class="muted">(<span id="set-manual-n">0</span>)</span></h3><span class="tiny muted">quantity typed in at Manual count</span></div>
+            <ul id="set-manual" class="set-list"></ul>
+          </div>
         </div>
       </section>
 
