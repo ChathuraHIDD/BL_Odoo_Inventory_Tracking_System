@@ -67,7 +67,9 @@
         <span class="step-line"></span>
         <button class="step" data-view="scan"><span class="step-n">2</span><span class="step-l">Scan</span></button>
         <span class="step-line"></span>
-        <button class="step" data-view="report"><span class="step-n">3</span><span class="step-l">Report</span></button>
+        <button class="step" data-view="manual"><span class="step-n">3</span><span class="step-l">Manual count</span></button>
+        <span class="step-line"></span>
+        <button class="step" data-view="report"><span class="step-n">4</span><span class="step-l">Report</span></button>
       </nav>
 
       <div class="topbar-right">
@@ -143,6 +145,16 @@
             <div id="loc-list" class="loc-list"></div>
           </div>
 
+          <div class="loc-block">
+            <div class="loc-head">
+              <div>
+                <h3>How each product is counted</h3>
+                <p class="tiny muted"><b>Scan</b>: every serial label is scanned. <b>Manual</b>: counted by hand, quantity typed in at the Manual count step.</p>
+              </div>
+            </div>
+            <div id="mode-list" class="mode-list"></div>
+          </div>
+
           <div class="card-foot">
             <span id="scope-note" class="muted"></span>
             <button id="start-scan" class="btn btn-primary btn-lg">Start scanning <span aria-hidden="true">→</span></button>
@@ -158,6 +170,7 @@
             <p class="muted">Scan each QR code with the scanner gun or the camera. Every scan is checked against the report straight away.</p>
           </div>
           <div class="head-actions">
+            <button class="btn btn-secondary" data-goto="manual">Manual count</button>
             <button class="btn btn-secondary" data-goto="report">View report</button>
           </div>
         </div>
@@ -248,7 +261,42 @@
         </div>
       </section>
 
-      <!-- ---------- STEP 3 : REPORT ---------- -->
+      <!-- ---------- STEP 3 : MANUAL COUNT ---------- -->
+      <section id="view-manual" class="view hidden">
+        <div class="view-head">
+          <div>
+            <h1>Manual count</h1>
+            <p class="muted">These products are counted by hand. Type the quantity you counted next to each one; the difference against the Odoo report shows straight away. Press <b>Enter</b> to jump to the next product.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-secondary" data-goto="scan">Back to scanning</button>
+            <button class="btn btn-primary" data-goto="report">View report</button>
+          </div>
+        </div>
+
+        <div class="stat-cards stat-cards-4">
+          <div class="stat"><div class="stat-l">Products</div><div id="m-products" class="stat-v">0</div><div class="stat-s">counted by hand</div></div>
+          <div class="stat stat-blue"><div class="stat-l">Entered</div><div id="m-entered" class="stat-v">0</div><div class="stat-s">quantities typed in</div></div>
+          <div class="stat stat-green"><div class="stat-l">✔ Match</div><div id="m-match" class="stat-v">0</div><div class="stat-s">same as the report</div></div>
+          <div class="stat stat-red"><div class="stat-l">✘ Difference</div><div id="m-diff" class="stat-v">0</div><div id="m-diff-s" class="stat-s"></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head wrap">
+            <h3>Products to count by hand</h3>
+            <div class="filters"><input id="man-filter" class="input-sm" type="search" placeholder="Search product…" /></div>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="man-table">
+              <thead><tr><th>Product</th><th>Code</th><th>Location</th><th class="num">In report</th><th class="c-count">Counted</th><th class="num">Difference</th><th class="c-pi">Status</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="man-empty" class="empty hidden">No products are set to manual count. Change this on the Upload step.</div>
+        </div>
+      </section>
+
+      <!-- ---------- STEP 4 : REPORT ---------- -->
       <section id="view-report" class="view hidden">
         <div class="view-head">
           <div>
@@ -271,7 +319,7 @@
         <!-- Report: the uploaded Odoo columns + Physical Inventory tick -->
         <div class="card">
           <div class="card-head wrap">
-            <h3>Stock report · physical inventory status</h3>
+            <h3>Scanned items · physical inventory status</h3>
             <div class="filters no-print">
               <div class="seg" id="status-seg">
                 <button data-status="all" class="active">All <span></span></button>
@@ -292,6 +340,21 @@
           <div id="detail-empty" class="empty hidden">No items match these filters.</div>
         </div>
 
+        <!-- Manual count -->
+        <div class="card" id="report-manual-card">
+          <div class="card-head">
+            <h3>Manual count · counted by hand</h3>
+            <span id="rm-note" class="tiny muted"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="report-manual">
+              <thead><tr><th>Product</th><th>Code</th><th>Location</th><th class="num">In report</th><th class="num">Counted</th><th class="num">Difference</th><th class="c-pi">Status</th></tr></thead>
+              <tbody></tbody>
+              <tfoot></tfoot>
+            </table>
+          </div>
+        </div>
+
         <!-- Summary -->
         <div class="card">
           <div class="card-head"><h3>Summary</h3><span id="sum-accuracy" class="tiny muted"></span></div>
@@ -302,8 +365,15 @@
             <div class="stat stat-violet"><div class="stat-l">Not in report</div><div id="r-unknown" class="stat-v">0</div><div class="stat-s">scanned, not on report</div></div>
             <div class="stat stat-blue"><div class="stat-l">Other location</div><div id="r-other" class="stat-v">0</div><div class="stat-s">on report, outside scope</div></div>
           </div>
+          <div class="card-head sub-head"><h4>Manual count</h4></div>
+          <div class="stat-cards stat-cards-4">
+            <div class="stat"><div class="stat-l">Products</div><div id="rs-m-products" class="stat-v">0</div><div id="rs-m-entered" class="stat-s"></div></div>
+            <div class="stat stat-green"><div class="stat-l">✔ Match</div><div id="rs-m-match" class="stat-v">0</div><div class="stat-s">same as the report</div></div>
+            <div class="stat stat-red"><div class="stat-l">✘ Difference</div><div id="rs-m-diff" class="stat-v">0</div><div id="rs-m-diff-s" class="stat-s"></div></div>
+            <div class="stat stat-blue"><div class="stat-l">Quantity</div><div id="rs-m-qty" class="stat-v">0</div><div id="rs-m-qty-s" class="stat-s"></div></div>
+          </div>
           <div class="card-head sub-head">
-            <h4>By product</h4>
+            <h4>Scanned items by product</h4>
             <span class="tiny muted no-print">Click a row to filter the report above</span>
           </div>
           <div class="table-wrap">

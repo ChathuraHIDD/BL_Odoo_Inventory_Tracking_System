@@ -18,6 +18,15 @@
   const PREFS_KEY = 'bl_inv_prefs';
   const CAMERA_REPEAT_MS = 2500; // ignore the same code seen by the camera within this window
 
+  // Products counted by scanning every serial label. All other products are counted by hand (Manual count step).
+  // The choice can be changed per product on the Upload screen and is remembered on this computer.
+  const SCAN_CODES = [
+    'BL-AQAX-001', 'BL-AQAX-006', 'BL-AQAX-007', 'BL-BAT-008', 'BL-P3A-011', 'BL-P3A-012', 'BL-P3A-015',
+    'BL-BAT-001', 'BL-BAT-002', 'BL-BAT-003', 'BL-BAT-004', 'BL-BAT-005', 'BL-BAT-006', 'IMP_USED',
+    'BL-CON-001', 'BL-CON-002', 'BL-CON-003', 'BL-CON-004', 'BL-CON-005',
+  ];
+  const SCAN_NAMES = ['REPAIR PACK BATTERY MODULES', 'IMPORTED USED BATTERY', 'SCRAP USED BATTERY'];
+
   /* ------------------------------------------------------------------
    * Small helpers
    * ------------------------------------------------------------------ */
@@ -238,15 +247,38 @@
     looseIndex = new Map();
     if (!S) return;
     S.items.forEach((it, i) => {
+      if (!it.key) return;
       index.set(it.key, i);
       const l = loose(it.key);
       if (l) looseIndex.set(l, looseIndex.has(l) && looseIndex.get(l) !== it.key ? null : it.key);
     });
   }
 
+  /** 'scan' or 'manual' for a product. */
+  const modeOf = (product) => (S && S.mode && S.mode[product]) || 'manual';
+
+  function defaultMode(it) {
+    const saved = prefs.modes && prefs.modes[it.product];
+    if (saved) return saved;
+    return SCAN_CODES.includes(String(it.code).toUpperCase()) || SCAN_NAMES.includes(String(it.name).trim().toUpperCase()) ? 'scan' : 'manual';
+  }
+
+  /** Give every product a counting method; products with stock lines that have no serial can only be counted by hand. */
+  function ensureModes() {
+    if (!S) return;
+    S.mode = S.mode || {};
+    S.manual = S.manual || {};
+    const noSerial = new Set(S.items.filter((it) => !it.key).map((it) => it.product));
+    for (const it of S.items) {
+      if (noSerial.has(it.product)) S.mode[it.product] = 'manual';
+      else if (!S.mode[it.product]) S.mode[it.product] = defaultMode(it);
+    }
+  }
+
   function loadSession() {
     S = safeGet(localStorage, STORE_KEY);
     if (S && !Array.isArray(S.items)) S = null;
+    ensureModes();
     rebuildIndex();
     if (S) {
       // re-match saved scans with the current rules (e.g. serials scanned with a mistyped "-" or "/")
@@ -314,7 +346,9 @@
     for (const sc of S.scans) {
       const idx = index.get(sc.key);
       let status;
-      if (idx === undefined || !sel.has(S.items[idx].location)) {
+      if (idx !== undefined && modeOf(S.items[idx].product) === 'manual') {
+        status = 'manual'; // product is counted by hand: the scan is kept in the log but not counted
+      } else if (idx === undefined || !sel.has(S.items[idx].location)) {
         const type = idx === undefined ? 'unknown' : 'other';
         const ex = exceptions.get(sc.key);
         if (ex) { ex.count++; status = 'duplicate'; dup++; }
@@ -331,7 +365,7 @@
       scanStatus.set(sc.id, status);
     }
 
-    const scope = S.items.filter((it) => sel.has(it.location));
+    const scope = S.items.filter((it) => it.key && sel.has(it.location) && modeOf(it.product) === 'scan');
     const byProduct = new Map();
     let found = 0;
     for (const it of scope) {
@@ -342,8 +376,38 @@
       p.expected++;
       if (hit) p.found++;
     }
+    // manual count: quantity on the report per product vs. the quantity typed in
+    const man = new Map();
+    for (const it of S.items) {
+      if (!sel.has(it.location) || modeOf(it.product) !== 'manual') continue;
+      let m = man.get(it.product);
+      if (!m) { m = { product: it.product, name: it.name, code: it.code, unit: it.unit, expected: 0, locations: new Set() }; man.set(it.product, m); }
+      m.expected += Number(it.qty) || 0;
+      m.locations.add(it.location);
+    }
+    const manual = [...man.values()].map((m) => {
+      const v = S.manual[m.product];
+      const counted = v === undefined || v === null || v === '' ? null : Number(v);
+      return { ...m, locations: [...m.locations], counted, diff: counted === null ? null : Math.round((counted - m.expected) * 1000) / 1000 };
+    }).sort((a, b) => collator.compare(a.name, b.name));
+    const sum = (arr, f) => arr.reduce((t, x) => t + (f(x) || 0), 0);
+    const entered = manual.filter((m) => m.counted !== null);
+    const manualStats = {
+      products: manual.length,
+      entered: entered.length,
+      notCounted: manual.length - entered.length,
+      match: entered.filter((m) => m.diff === 0).length,
+      short: entered.filter((m) => m.diff < 0).length,
+      over: entered.filter((m) => m.diff > 0).length,
+      expected: sum(manual, (m) => m.expected),
+      counted: sum(entered, (m) => m.counted),
+      expectedEntered: sum(entered, (m) => m.expected),
+    };
+
     const exc = [...exceptions.values()];
     R = {
+      manual,
+      man: manualStats,
       scope,
       firstScan,
       scanStatus,
@@ -364,7 +428,7 @@
   let currentView = 'upload';
 
   function setView(view) {
-    if ((view === 'scan' || view === 'report') && !(S && S.started)) view = 'upload';
+    if (view !== 'upload' && !(S && S.started)) view = 'upload';
     currentView = view;
     $$('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
     if (view !== 'scan') stopCamera();
@@ -376,13 +440,14 @@
       renderScan();
       focusScan();
     }
+    if (view === 'manual') renderManual();
     if (view === 'report') renderReport();
     window.scrollTo({ top: 0 });
   }
 
   function updateStepper() {
     const started = !!(S && S.started);
-    const order = ['upload', 'scan', 'report'];
+    const order = ['upload', 'scan', 'manual', 'report'];
     const cur = order.indexOf(currentView);
     $$('.step').forEach((btn) => {
       const v = btn.dataset.view;
@@ -470,11 +535,13 @@
         for (let r = h + 1; r < rows.length; r++) {
           const row = rows[r];
           const serial = String(row[cSerial] ?? '').trim();
-          if (!serial) { if (row.some((c) => String(c).trim())) noSerial++; continue; }
-          const key = norm(serial);
-          if (seen.has(key)) { dupes++; continue; }
-          seen.add(key);
           const product = cProduct >= 0 ? String(row[cProduct] ?? '').trim() : '';
+          // rows with no serial: Odoo group headers (no product) are skipped; real stock lines are kept for manual count
+          if (!serial && !product) continue;
+          const key = serial ? norm(serial) : '';
+          if (!serial) noSerial++;
+          else if (seen.has(key)) { dupes++; continue; }
+          else seen.add(key);
           const { code, name } = parseProduct(product);
           items.push({
             key,
@@ -483,7 +550,7 @@
             code,
             name,
             location: cLocation >= 0 ? (String(row[cLocation] ?? '').trim() || '(no location)') : '(no location)',
-            qty: cQty >= 0 ? Number(String(row[cQty]).replace(/,/g, '')) || 0 : 1,
+            qty: cQty >= 0 ? Number(String(row[cQty]).replace(/,/g, '')) || 0 : (serial ? 1 : 0),
             unit: cUnit >= 0 ? String(row[cUnit] ?? '').trim() : '',
             cells: columns.map((_, c) => cellValue(rawRows[r] ? rawRows[r][c] : row[c])),
           });
@@ -525,11 +592,12 @@
         started: false,
         scans: [],
         warnings: [
-          parsed.noSerial ? `${fmtInt(parsed.noSerial)} row(s) without a serial number were skipped.` : '',
+          parsed.noSerial ? `${fmtInt(parsed.noSerial)} stock line(s) without a serial number will be counted by hand (Manual count).` : '',
           parsed.dupes ? `${fmtInt(parsed.dupes)} duplicate serial row(s) in the file were merged.` : '',
           parsed.missingProductCol ? 'No "Product" column was found, so product names will be blank.' : '',
         ].filter(Boolean),
       };
+      ensureModes();
       rebuildIndex();
       compute();
       saveSession();
@@ -563,6 +631,15 @@
       const set = new Set(S.selected);
       cb.checked ? set.add(cb.value) : set.delete(cb.value);
       S.selected = S.locations.map((l) => l.name).filter((n) => set.has(n));
+      afterScopeChange();
+    });
+    $('#mode-list').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-mode]');
+      if (!b || b.disabled) return;
+      const product = b.closest('[data-product]').dataset.product;
+      S.mode[product] = b.dataset.mode;
+      prefs.modes = Object.assign({}, prefs.modes, { [product]: b.dataset.mode }); // remember for the next upload
+      safeSet(localStorage, PREFS_KEY, prefs);
       afterScopeChange();
     });
     $('#start-scan').addEventListener('click', () => {
@@ -604,11 +681,32 @@
         <span class="loc-count">${fmtInt(l.count)}</span>
       </label>`).join('');
 
+    // counting method per product (scan first, then manual)
+    const prods = new Map();
+    for (const it of S.items) {
+      let p = prods.get(it.product);
+      if (!p) { p = { product: it.product, name: it.name, code: it.code, n: 0, noSerial: false }; prods.set(it.product, p); }
+      p.n++;
+      if (!it.key) p.noSerial = true;
+    }
+    const plist = [...prods.values()].sort((a, b) => (modeOf(a.product) === modeOf(b.product) ? collator.compare(a.name, b.name) : modeOf(a.product) === 'scan' ? -1 : 1));
+    $('#mode-list').innerHTML = plist.map((p) => {
+      const m = modeOf(p.product);
+      return `<div class="mode-item">
+        <span class="mode-name" title="${esc(p.product)}">${esc(p.name)}${p.code ? `<small>${esc(p.code)}</small>` : ''}</span>
+        <span class="mode-n">${fmtInt(p.n)}</span>
+        <div class="seg seg-sm" data-product="${esc(p.product)}">
+          <button type="button" data-mode="scan" class="scan ${m === 'scan' ? 'active' : ''}" ${p.noSerial ? 'disabled title="Some stock lines have no serial number"' : ''}>Scan</button>
+          <button type="button" data-mode="manual" class="manual ${m === 'manual' ? 'active' : ''}">Manual</button>
+        </div>
+      </div>`;
+    }).join('');
+
     const btn = $('#start-scan');
     btn.disabled = !S.selected.length;
     btn.innerHTML = `${S.started ? 'Continue scanning' : 'Start scanning'} <span aria-hidden="true">→</span>`;
     $('#scope-note').innerHTML = S.selected.length
-      ? `<strong>${fmtInt(R.expected)}</strong> items in <strong>${S.selected.length}</strong> location${S.selected.length > 1 ? 's' : ''} will be counted.`
+      ? `<strong>${fmtInt(R.expected)}</strong> items to scan and <strong>${fmtInt(R.man.products)}</strong> products to count by hand in <strong>${S.selected.length}</strong> location${S.selected.length > 1 ? 's' : ''}.`
       : 'Select at least one location to count.';
   }
 
@@ -622,7 +720,7 @@
     other: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>',
     idle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>',
   };
-  const R_MARK = { found: '✓', duplicate: '2×', unknown: '!', other: '⌖' };
+  const R_MARK = { found: '✓', duplicate: '2×', unknown: '!', other: '⌖', manual: '✎' };
 
   let lastHitProduct = null;
   let liveProduct = null; // product shown in the live counter (product of the latest scan)
@@ -632,6 +730,12 @@
     if (!text || !S || !S.started) return null;
     const key = resolveKey(text);
     if (!key) return null;
+    const hitIdx = index.get(key);
+    if (hitIdx !== undefined && modeOf(S.items[hitIdx].product) === 'manual') {
+      // counted by hand: tell the user, but do not record the scan
+      if (!quiet) { showFeedback({ raw: text, key, t: Date.now() }, 'manual'); beep('other'); }
+      return 'manual';
+    }
     const existing = S.scans.find((sc) => sc.key === key);
     if (existing) {
       if (!quiet) {
@@ -668,6 +772,9 @@
     } else if (status === 'duplicate') {
       title = 'Already scanned';
       sub = `<span class="mono">${esc(it ? it.serial : scan.raw)}</span>${it ? ` · ${esc(it.name)}` : ''} · first scanned at ${fmtTime(scan.t)}. Not counted again.`;
+    } else if (status === 'manual') {
+      title = 'This product is counted by hand';
+      sub = `<span class="mono">${esc(it.serial)}</span> · ${esc(it.name)}. Not scanned: enter its quantity in <strong>Manual count</strong>.`;
     } else if (status === 'other') {
       title = 'On report, but in a location you are not counting';
       sub = `<span class="mono">${esc(it.serial)}</span> · ${esc(it.name)} · Odoo location: <strong>${esc(it.location)}</strong>`;
@@ -675,7 +782,7 @@
       title = 'Not in stock report';
       sub = `<span class="mono">${esc(scan.raw)}</span> is not on the uploaded Odoo report. It is listed under exceptions.`;
     }
-    const cls = ['found', 'duplicate', 'other'].includes(status) ? status : 'unknown';
+    const cls = status === 'manual' ? 'other' : ['found', 'duplicate', 'other'].includes(status) ? status : 'unknown';
     fb.className = `feedback ${cls}`;
     $('#fb-icon').innerHTML = ICONS[cls];
     $('#fb-title').textContent = title;
@@ -717,7 +824,7 @@
         const st = R.scanStatus.get(sc.id);
         const idx = index.get(sc.key);
         const it = idx === undefined ? null : S.items[idx];
-        const label = st === 'found' ? '' : st === 'other' ? `Other location (${it ? it.location : ''}) · ` : 'Not in report';
+        const label = st === 'found' ? '' : st === 'manual' ? 'Manual count product (not counted) · ' : st === 'other' ? `Other location (${it ? it.location : ''}) · ` : 'Not in report';
         return `<li class="${sc.id === newId ? 'new' : ''}">
           <span class="r-ico ${st}">${R_MARK[st]}</span>
           <div class="r-main">
@@ -919,7 +1026,84 @@
   }
 
   /* ------------------------------------------------------------------
-   * Step 3 — Report
+   * Step 3 — Manual count (products counted by hand)
+   * ------------------------------------------------------------------ */
+  const fmtQty = (n) => (n === null || n === undefined ? '' : Number(n).toLocaleString(undefined, { maximumFractionDigits: 3 }));
+  const fmtDiff = (d) => (d === null ? '—' : d > 0 ? `+${fmtQty(d)}` : d < 0 ? `−${fmtQty(-d)}` : '0');
+  const manualStatus = (m) => (m.counted === null ? 'pending' : m.diff === 0 ? 'match' : m.diff < 0 ? 'short' : 'over');
+  const MANUAL_LABEL = { pending: 'Not counted', match: 'Match', short: 'Short', over: 'Over' };
+  const manualIcon = (m) => {
+    const st = manualStatus(m);
+    if (st === 'pending') return '<span class="pi pi-wait" title="Not counted yet">–</span>';
+    return st === 'match'
+      ? `<span class="pi pi-yes" title="Matches the report">${SVG_TICK}</span>`
+      : `<span class="pi pi-no" title="${MANUAL_LABEL[st]}">${SVG_CROSS}</span>`;
+  };
+
+  function renderManualStats() {
+    const m = R.man;
+    $('#m-products').textContent = fmtInt(m.products);
+    $('#m-entered').textContent = `${fmtInt(m.entered)} / ${fmtInt(m.products)}`;
+    $('#m-match').textContent = fmtInt(m.match);
+    $('#m-diff').textContent = fmtInt(m.short + m.over);
+    $('#m-diff-s').textContent = `${fmtInt(m.short)} short · ${fmtInt(m.over)} over`;
+  }
+
+  function renderManual() {
+    if (!S || !R) return;
+    renderManualStats();
+    const q = norm($('#man-filter').value);
+    const list = R.manual.filter((m) => !q || norm(m.product).includes(q));
+    $('#man-table tbody').innerHTML = list.map((m) => `<tr data-product="${esc(m.product)}" class="m-${manualStatus(m)}">
+      <td><div class="t-prod">${esc(m.name)}</div></td>
+      <td class="mono">${esc(m.code)}</td>
+      <td class="tiny">${esc(m.locations.join(', '))}</td>
+      <td class="num"><b>${fmtQty(m.expected)}</b>${m.unit ? ` <span class="muted tiny">${esc(m.unit)}</span>` : ''}</td>
+      <td class="c-count"><input class="count-input" type="number" inputmode="decimal" min="0" step="any" value="${m.counted === null ? '' : m.counted}" placeholder="Qty" aria-label="Counted quantity for ${esc(m.name)}" /></td>
+      <td class="num m-diff">${fmtDiff(m.diff)}</td>
+      <td class="c-pi m-st">${manualIcon(m)}</td>
+    </tr>`).join('');
+    $('#man-empty').classList.toggle('hidden', R.manual.length > 0);
+    $('#man-table').classList.toggle('hidden', !R.manual.length);
+  }
+
+  let manualSaveT;
+  function onManualInput(input) {
+    const tr = input.closest('tr[data-product]');
+    const product = tr.dataset.product;
+    const v = input.value.trim();
+    const ok = v !== '' && !isNaN(Number(v)) && Number(v) >= 0;
+    S.manual = Object.fromEntries(Object.entries(S.manual).filter(([k]) => k !== product));
+    if (ok) S.manual[product] = Number(v);
+    compute();
+    const m = R.manual.find((x) => x.product === product);
+    if (m) {
+      tr.className = `m-${manualStatus(m)}`;
+      tr.querySelector('.m-diff').textContent = fmtDiff(m.diff);
+      tr.querySelector('.m-st').innerHTML = manualIcon(m);
+    }
+    renderManualStats();
+    clearTimeout(manualSaveT);
+    manualSaveT = setTimeout(saveSession, 250);
+  }
+
+  function initManual() {
+    const tbody = $('#man-table tbody');
+    tbody.addEventListener('input', (e) => { if (e.target.matches('.count-input')) onManualInput(e.target); });
+    tbody.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || !e.target.matches('.count-input')) return;
+      e.preventDefault();
+      const inputs = $$('#man-table .count-input');
+      const next = inputs[inputs.indexOf(e.target) + 1];
+      if (next) { next.focus(); next.select(); } else e.target.blur();
+    });
+    tbody.addEventListener('focusin', (e) => { if (e.target.matches('.count-input')) e.target.select(); });
+    let t;
+    $('#man-filter').addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderManual, 120); });
+  }
+
+  /* ------------------------------------------------------------------
+   * Step 4 — Report
    * ------------------------------------------------------------------ */
   const filt = { status: 'all', product: '', location: '', q: '' };
   const FALLBACK_COLS = ['Location', 'Product', 'Lot/Serial Number', 'Quantity', 'Unit'];
@@ -1006,6 +1190,32 @@
 
     renderDetail();
     renderExceptions();
+    renderReportManual();
+  }
+
+  function renderReportManual() {
+    const m = R.man;
+    $('#report-manual-card').classList.toggle('hidden', !m.products);
+    $('#rm-note').textContent = m.products ? `${fmtInt(m.entered)} of ${fmtInt(m.products)} products counted` : '';
+    $('#report-manual tbody').innerHTML = R.manual.map((x) => `<tr class="m-${manualStatus(x)}">
+      <td class="t-prod">${esc(x.name)}</td>
+      <td class="mono">${esc(x.code)}</td>
+      <td class="tiny">${esc(x.locations.join(', '))}</td>
+      <td class="num">${fmtQty(x.expected)}</td>
+      <td class="num"><b>${x.counted === null ? '<span class="muted">—</span>' : fmtQty(x.counted)}</b></td>
+      <td class="num m-diff">${fmtDiff(x.diff)}</td>
+      <td class="c-pi">${manualIcon(x)}</td>
+    </tr>`).join('');
+    $('#report-manual tfoot').innerHTML = R.manual.length > 1 ? `<tr><td>Total</td><td></td><td></td>
+      <td class="num">${fmtQty(m.expected)}</td><td class="num">${fmtQty(m.counted)}</td>
+      <td class="num">${m.entered ? fmtDiff(Math.round((m.counted - m.expectedEntered) * 1000) / 1000) : '—'}</td><td></td></tr>` : '';
+    $('#rs-m-products').textContent = fmtInt(m.products);
+    $('#rs-m-entered').textContent = `${fmtInt(m.entered)} counted · ${fmtInt(m.notCounted)} not counted`;
+    $('#rs-m-match').textContent = fmtInt(m.match);
+    $('#rs-m-diff').textContent = fmtInt(m.short + m.over);
+    $('#rs-m-diff-s').textContent = `${fmtInt(m.short)} short · ${fmtInt(m.over)} over`;
+    $('#rs-m-qty').textContent = fmtQty(m.counted);
+    $('#rs-m-qty-s').textContent = `counted · ${fmtQty(m.expected)} in report`;
   }
 
   function renderDetail() {
@@ -1053,7 +1263,7 @@
   }
 
   /* ---------- Excel ---------- */
-  const SCAN_LABEL = { found: 'Found', duplicate: 'Already scanned', other: 'Other location', unknown: 'Not in report' };
+  const SCAN_LABEL = { found: 'Found', duplicate: 'Already scanned', other: 'Other location', unknown: 'Not in report', manual: 'Manual count product (not counted)' };
   const fmtFull = (t) => (t ? new Date(t).toLocaleString([], { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
 
   /** Summary block (rows) used below the report and on its own sheet. */
@@ -1077,7 +1287,30 @@
     ];
     for (const p of R.products) rows.push([p.name, p.code, p.expected, p.found, p.expected - p.found, `${p.expected ? Math.floor((p.found / p.expected) * 100) : 0}%`]);
     rows.push(['TOTAL', '', R.expected, R.found, R.missing, `${accuracy().toFixed(1)}%`]);
-    rows.push([], [`Legend: ${TICK} = physically found and scanned · ${CROSS} = on the stock report but not found`]);
+    if (R.man.products) {
+      const m = R.man;
+      rows.push([], ['MANUAL COUNT (counted by hand)'],
+        ['Products counted by hand', m.products],
+        ['Quantities entered', `${m.entered} of ${m.products}`],
+        [`${TICK} Match`, m.match],
+        [`${CROSS} Short`, m.short],
+        [`${CROSS} Over`, m.over],
+        ['Not counted', m.notCounted],
+        [],
+        ...manualRows());
+    }
+    rows.push([], [`Legend: ${TICK} = physically found / matches the report · ${CROSS} = not found, or the manual count differs from the report`]);
+    return rows;
+  }
+
+  const MANUAL_XLS = { pending: 'Not counted', match: `${TICK} Match`, short: `${CROSS} Short`, over: `${CROSS} Over` };
+
+  /** Manual count table rows (header + one row per product + total). */
+  function manualRows() {
+    const m = R.man;
+    const rows = [['Product', 'Code', 'Location', 'In report', 'Counted', 'Difference', 'Status']];
+    for (const x of R.manual) rows.push([x.name, x.code, x.locations.join(', '), x.expected, x.counted === null ? '' : x.counted, x.diff === null ? '' : x.diff, MANUAL_XLS[manualStatus(x)]]);
+    rows.push(['TOTAL', '', '', m.expected, m.entered ? m.counted : '', m.entered ? Math.round((m.counted - m.expectedEntered) * 1000) / 1000 : '', `${m.match} of ${m.products} match`]);
     return rows;
   }
 
@@ -1110,6 +1343,15 @@
     const ws2 = XLSX.utils.aoa_to_sheet(summaryRows(now));
     ws2['!cols'] = [{ wch: 34 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 13 }, { wch: 11 }];
     XLSX.utils.book_append_sheet(wb, ws2, 'Summary');
+
+    // Sheet: manual count
+    if (R.man.products) {
+      const mr = manualRows();
+      const wsm = XLSX.utils.aoa_to_sheet(mr);
+      wsm['!cols'] = fitCols(mr);
+      wsm['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: mr.length - 2, c: mr[0].length - 1 } }) };
+      XLSX.utils.book_append_sheet(wb, wsm, 'Manual Count');
+    }
 
     // Sheet 3: only the items not found
     const miss = [header, ...rows.filter((r) => !r.found).map(line)];
@@ -1168,6 +1410,23 @@
       return `<tr><td><b>${esc(p.name)}</b></td><td class="mono">${esc(p.code)}</td><td class="num">${fmtInt(p.expected)}</td><td class="num ok">${fmtInt(p.found)}</td><td class="num ${p.expected - p.found ? 'bad' : ''}">${fmtInt(p.expected - p.found)}</td><td><div class="bar"><i style="width:${pct}%"></i></div></td><td class="num">${Math.floor(pct)}%</td></tr>`;
     }).join('');
 
+    const mm = R.man;
+    const manualPdf = mm.products ? `
+      <h2 style="margin-top:16px">Manual count · counted by hand</h2>
+      <table class="grid">
+        <thead><tr><th>Product</th><th>Code</th><th>Location</th><th class="num">In report</th><th class="num">Counted</th><th class="num">Difference</th><th class="pi-c">Status</th></tr></thead>
+        <tbody>${R.manual.map((x) => `<tr class="${manualStatus(x) === 'match' || manualStatus(x) === 'pending' ? '' : 'miss'}"><td><b>${esc(x.name)}</b></td><td class="mono">${esc(x.code)}</td><td>${esc(x.locations.join(', '))}</td><td class="num">${fmtQty(x.expected)}</td><td class="num"><b>${x.counted === null ? '—' : fmtQty(x.counted)}</b></td><td class="num ${x.diff ? 'bad' : x.diff === 0 ? 'ok' : ''}">${fmtDiff(x.diff)}</td><td class="pi-c">${manualIcon(x)}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td>Total</td><td></td><td></td><td class="num">${fmtQty(mm.expected)}</td><td class="num">${fmtQty(mm.counted)}</td><td class="num">${mm.entered ? fmtDiff(Math.round((mm.counted - mm.expectedEntered) * 1000) / 1000) : '—'}</td><td class="pi-c">${mm.match}/${mm.products}</td></tr></tfoot>
+      </table>` : '';
+    const manualKpis = mm.products ? `
+        <h3>Manual count</h3>
+        <div class="kpis">
+          <div class="kpi"><span>Products</span><b>${fmtInt(mm.products)}</b><small>${fmtInt(mm.entered)} counted · ${fmtInt(mm.notCounted)} not counted</small></div>
+          <div class="kpi g"><span>${TICK} Match</span><b>${fmtInt(mm.match)}</b><small>same as the report</small></div>
+          <div class="kpi r"><span>${CROSS} Difference</span><b>${fmtInt(mm.short + mm.over)}</b><small>${fmtInt(mm.short)} short · ${fmtInt(mm.over)} over</small></div>
+          <div class="kpi b"><span>Quantity</span><b>${fmtQty(mm.counted)}</b><small>counted · ${fmtQty(mm.expected)} in report</small></div>
+        </div>` : '';
+
     const exc = R.exceptions.length ? `
       <h3>Exceptions: scanned but not expected</h3>
       <table class="grid"><thead><tr><th>Type</th><th>Scanned value</th><th>Product</th><th>Report location</th><th class="num">Scans</th><th>First scanned</th></tr></thead><tbody>
@@ -1209,6 +1468,7 @@
       .pi svg { width: 9px; height: 9px; }
       .pi-yes { background: #4fae2e; }
       .pi-no { background: #d93b3b; }
+      .pi-wait { background: #e3e8ed; color: #6b7a88; font-weight: 800; font-size: 9px; }
       .summary { break-before: page; }
       .kpis { display: flex; gap: 8px; margin-bottom: 6px; }
       .kpi { flex: 1; border: 1px solid #e3e8ed; border-top: 3px solid #2f3e4a; border-radius: 6px; padding: 8px 10px; }
@@ -1234,16 +1494,18 @@
         <div><span>Source report</span><b>${esc(S.fileName)}</b></div>
         <div><span>Locations counted</span><b>${esc(S.selected.join(', '))}</b></div>
         <div><span>Count started</span><b>${esc(fmtDateTime(S.startedAt))}</b></div>
-        <div><span>Items</span><b>${fmtInt(R.expected)} expected · ${fmtInt(R.found)} found</b></div>
+        <div><span>Scanned items</span><b>${fmtInt(R.expected)} expected · ${fmtInt(R.found)} found</b></div>
+        <div><span>Manual count</span><b>${fmtInt(mm.match)} of ${fmtInt(mm.products)} products match</b></div>
         <div><span>Accuracy</span><b>${acc.toFixed(1)}%</b></div>
       </div>
 
-      <h2>Stock report · physical inventory status</h2>
+      <h2>Scanned items · physical inventory status</h2>
       <table class="grid">
         <thead><tr><th class="num">#</th>${vis.map((c) => `<th class="${numericCol(cols[c]) ? 'num' : ''}">${esc(cols[c])}</th>`).join('')}<th class="pi-c">${PI_COL}</th></tr></thead>
         <tbody>${body}</tbody>
       </table>
       <div class="legend"><span>${piIcon(true)} Physically found and scanned</span><span>${piIcon(false)} On the stock report, not found</span></div>
+      ${manualPdf}
 
       <section class="summary">
         <h2>Summary</h2>
@@ -1254,7 +1516,8 @@
           <div class="kpi v"><span>Not in report</span><b>${fmtInt(R.unknown)}</b><small>scanned, not on report</small></div>
           <div class="kpi b"><span>Other location</span><b>${fmtInt(R.other)}</b><small>on report, outside scope</small></div>
         </div>
-        <h3>By product</h3>
+        ${manualKpis}
+        <h3>Scanned items by product</h3>
         <table class="grid">
           <thead><tr><th>Product</th><th>Code</th><th class="num">Expected</th><th class="num">${TICK} Found</th><th class="num">${CROSS} Not found</th><th>Progress</th><th class="num">%</th></tr></thead>
           <tbody>${prodRows}</tbody>
@@ -1350,6 +1613,7 @@
     initNav();
     initUpload();
     initScan();
+    initManual();
     initReport();
     // keep other open tabs of the app in sync (e.g. report open in a second tab)
     window.addEventListener('storage', (e) => {
