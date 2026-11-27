@@ -770,7 +770,7 @@
       <div class="live-count${bump ? ' bump' : ''}"><b>${fmtInt(p.found)}</b><span>/ ${fmtInt(p.expected)}</span></div>
       <div class="live-sub">scanned / in report</div>
       <div class="bar ${done ? 'complete' : ''}"><i style="width:${pct}%"></i></div>
-      <div class="live-foot">${done ? '<strong>✔ All found</strong>' : `<strong>${fmtInt(left)}</strong> left`}<span>${Math.floor(pct)}%</span></div>`;
+      <div class="live-foot"><span>${done ? '<strong>✔ All found</strong>' : `<strong>${fmtInt(left)}</strong> left`}</span><span>${Math.floor(pct)}%</span></div>`;
   }
 
   function renderProductProgress() {
